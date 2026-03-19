@@ -1,0 +1,16 @@
+---
+- name: Generate Namespace Workflows
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    workspace: "{{ lookup('env', 'WORKSPACE') | default(lookup('env','PWD'), true) }}"
+  tasks:
+
+    - name: "Call roles to generate workflows defined in namespace"
+      when:
+        - tp_namespace is defined
+        - tp_env is defined
+      include_role:
+        name: "generate"
