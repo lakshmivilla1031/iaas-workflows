@@ -1,0 +1,61 @@
+---
+name: 'IAAS Ansible Run Action'
+description: 'Composite action used to run Ansible within IAAS requirements'
+inputs:
+  inventory_path:
+    description: "The inventory deployment path"
+    required: true
+  playbook:
+    description: "The playbook to run"
+    required: true
+  node_types:
+    description: "The optional deployment node types"
+    required: false
+  limits:
+    description: "Limit - Leave blank for no limits, or --limit= plus a comma delimited string of nodes to action      "
+    required: false
+  extra-vars:
+    description: "Extra Vars - Leave blank, or --extra-vars \"foo=bar\""
+    required: false
+  ansible_debug:
+    description: "Choose Ansible Debug Level"
+    required: true
+    default: '-vvv'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Run ansible playbook
+      shell: bash
+      run: |
+        date +%Y%m%d-%H%M%S
+        export WORKSPACE=$(pwd)
+        export ANSIBLE_FORCE_COLOR=true
+        export ANSIBLE_STDOUT_CALLBACK=debug
+        export ANSIBLE_LIBRARY=Pipelines/modules
+        # Some comment
+
+        args="${{ inputs.ansible_debug }}"
+
+        if [ -n "${{ inputs.limits }}" ] ; then
+          args+=" ${{ inputs.limits }}"
+        fi
+        if [ -n "${{ inputs.extra-vars }}" ] ; then
+          args+=" ${{ inputs.extra-vars }}"
+        fi
+
+        if [ -n "${{ inputs.node_types }}" ] ; then
+          for node in ${{ inputs.node_types }} ; do
+            ansible-playbook -f9 --vault-password=~/.vp -i \
+              ${{ inputs.inventory_path }}/${node}.yml  ${{ inputs.playbook }} ${args}
+          done
+        else
+          if [ -f "${{ inputs.inventory_path }}" ] ; then
+              ansible-playbook -f9 --vault-password=~/.vp \
+                -i ${{ inputs.inventory_path }}  ${{ inputs.playbook }} ${args}
+          else
+            for file in $(ls ${{ inputs.inventory_path }}/*.yml) ; do
+              ansible-playbook -f9 --vault-password=~/.vp -i ${file}  ${{ inputs.playbook }} ${args}
+            done
+          fi
+        fi

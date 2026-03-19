@@ -1,0 +1,35 @@
+---
+name: 'IAAS Gut Credential'
+description: 'Composite action used to create / update git credentials'
+inputs:
+  email:
+    description: Committer's email address
+    required: true
+    default: ${{ github.actor }}@users.noreply.github.com
+  name:
+    description: Committer's username
+    required: true
+    default: ${{ github.actor }}
+  path:
+    description: Repo directory path if not current directory
+    required: false
+  access_token:
+    description: Token used to push the code
+    required: true
+    default: ${{ github.token }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Git credential create and store
+      id: git-credential
+      shell: bash
+      run: |
+        chmod a+x "${GITHUB_ACTION_PATH}/script.sh"
+
+        args=" --workspace ${{ inputs.path }}"
+        args+=" --user ${{ inputs.name }}"
+        args+=" --email ${{ inputs.email }}"
+        args+=" --token ${{ inputs.access_token }}"
+
+        ${GITHUB_ACTION_PATH}/script.sh ${args}

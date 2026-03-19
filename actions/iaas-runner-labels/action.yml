@@ -1,0 +1,37 @@
+---
+name: 'IAAS Runner Labels Action'
+description: 'Composite action used to prepare the IAAS Runner Labels'
+inputs:
+  region:
+    description: "The deployment region"
+    type: string
+  tp_env:
+    description: "The deployment environment"
+    default: "unused"
+    type: string
+outputs:
+  runner-labels-json:
+    description: "The list of node types as json string"
+    value: ${{ steps.runner-labels.outputs.value }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Output the runner environment
+      if: inputs.tp_env != 'unused'
+      id: runner_env
+      uses: Tvlport-IAAS/iaas-workflows/actions/iaas-major-env@main
+      with:
+        tp_env: ${{ inputs.tp_env }}
+
+    - name: Return node types as a json array
+      id: runner-labels
+      shell: bash
+      run: |
+        chmod a+x ${GITHUB_ACTION_PATH}/script.sh
+        args=" --region ${{ inputs.region }}"
+        if [ "${{ inputs.tp_env }}" != "unused" ] ; then
+          args+=" --env ${{ steps.runner_env.outputs.major_env }}"
+        fi
+        echo "args=\"${args}\""
+        ${GITHUB_ACTION_PATH}/script.sh ${args}

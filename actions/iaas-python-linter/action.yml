@@ -1,0 +1,38 @@
+---
+name: 'IaaS yaml linter'
+description: 'Composite action used to prepare the IAAS Ansible workspace'
+inputs:
+  files:
+    description: "The list of files"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+
+    - name: Install linters
+      shell: bash
+      run: |
+        linter=$(which pylint || true)
+        export PATH=$PATH:/home/runner/.local/bin
+        if [ -z "${linter}" ] ; then
+          python3 -m pip install pylint
+        fi
+
+        linter_support=$(which pylint-exit || true)
+
+        if [ -z "${linter_support}" ] ; then
+          python3 -m pip install pylint-exit
+        fi
+
+        pylint --version
+
+    - name: Run python linter in workspace
+      id: python-linter
+      shell: bash
+      run: |
+        export PATH=$PATH:/home/runner/.local/bin
+        chmod a+x ${GITHUB_ACTION_PATH}/script.sh
+        echo "::add-matcher::${GITHUB_ACTION_PATH}/matcher.json"
+        ${GITHUB_ACTION_PATH}/script.sh ${{ inputs.files }}
+        echo "::remove-matcher owner=bash-action::"

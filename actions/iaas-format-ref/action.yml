@@ -1,0 +1,24 @@
+---
+name: "IAAS Format Ref"
+description: "Composite action used to format ref value.  This is to support legacy Jenkins branch / tag references"
+inputs:
+  ref:
+    description: "The reference input value"
+    required: true
+outputs:
+  formatted_value:
+    description: "The formatted value"
+    value: ${{ steps.ref-format.outputs.value }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Output formatted ref value
+      id: ref-format
+      shell: bash
+      run: |
+        formatted_value="${{ inputs.ref }}"
+        if [[ "$formatted_value" == "refs/"* ]]; then
+          formatted_value=$(echo "$formatted_value" | cut -d '/' -f3)
+        fi
+        echo "value=${formatted_value}" >> $GITHUB_OUTPUT

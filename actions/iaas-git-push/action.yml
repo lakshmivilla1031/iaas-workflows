@@ -1,0 +1,78 @@
+---
+name: 'IAAS Git Push'
+description: 'Composite action used to add, rebase, commit and push files to a repo/branch'
+inputs:
+  email:
+    description: Committer's email address
+    required: true
+    default: ${{ github.actor }}@users.noreply.github.com
+  name:
+    description: Committer's username
+    required: true
+    default: ${{ github.actor }}
+  commit_message:
+    description: Commit message
+    required: true
+    default: Commit performed using Push and Commit action
+  path:
+    description: Repo directory path if not current directory
+    required: false
+  destination_branch:
+    description: Branch to push the changes back to
+    required: true
+    default: ${{ github.ref }}
+  file_patterns:
+    description: File patterns to add separated by space
+    required: true
+    default: .
+  access_token:
+    description: Token used to push the code
+    required: true
+    default: ${{ github.token }}
+  force:
+    description: Whether to perform force push
+    required: true
+    default: '0'
+  empty:
+    description: Whether to allow empty commit
+    required: false
+    default: '0'
+  tags:
+    description: Whether to use --tags
+    required: false
+    default: '0'
+outputs:
+  return-code:
+    description: "The return code of the push operation"
+    value: ${{ steps.git-push.outputs.value }}
+
+runs:
+  using: "composite"
+  steps:
+
+    - name: Create Git credentials
+      id: git-credentials
+      uses: Tvlport-IAAS/iaas-workflows/actions/iaas-git-credential@main
+      with:
+        name: ${{ inputs.name }}
+        email: ${{ inputs.email }}
+        path: ${{ inputs.path }}
+        access_token: ${{ inputs.access_token }}
+
+    - name: Git push and commit origin
+      id: git-push
+      shell: bash
+      run: |
+        chmod a+x "${GITHUB_ACTION_PATH}/script.sh"
+        commit_message=$(echo "${{ inputs.commit_message }}" | base64)
+        file_patterns=$(echo "${{ inputs.file_patterns }}" | base64)
+        args=" --workspace ${{ inputs.path }}"
+        args+=" --commit_message ${commit_message}"
+        args+=" --destination_branch ${{ inputs.destination_branch }}"
+        args+=" --file_patterns ${file_patterns}"
+
+        [[ "${{ inputs.force }}" != "0" ]] && args+=" --force"
+        [[ "${{ inputs.empty }}" != "0" ]] && args+=" --allow-empty"
+        [[ "${{ inputs.tags }}" != "0" ]] && args+=" --tags"
+
+        "${GITHUB_ACTION_PATH}/script.sh" ${args}

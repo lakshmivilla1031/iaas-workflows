@@ -1,0 +1,13 @@
+---
+name: 'IAAS Keys Cleanup Action'
+description: 'Composite action used to prepare the IAAS Ansible workspace'
+
+runs:
+  using: "composite"
+  steps:
+
+    - name: Cleanup Private Keys
+      shell: bash
+      run: |
+        rm -rf ~/ssh_keys
+        rm -f ~/.vp

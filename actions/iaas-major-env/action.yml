@@ -1,0 +1,22 @@
+---
+name: "IAAS major environment"
+description: "Composite action used to output the major environment"
+inputs:
+  tp_env:
+    description: "The environment"
+    required: true
+outputs:
+  major_env:
+    description: "The major_env"
+    value: ${{ steps.major_env.outputs.value }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Output the major environment
+      id: major_env
+      shell: bash
+      run: |
+        chmod a+x ${GITHUB_ACTION_PATH}/script.sh
+        output=$(${GITHUB_ACTION_PATH}/script.sh "${{ inputs.tp_env }}")
+        echo "value=${output}" >> $GITHUB_OUTPUT

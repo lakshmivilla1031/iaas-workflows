@@ -1,0 +1,29 @@
+---
+name: 'Build Ephemeral Inventory Action'
+description: 'Composite action used to build and ephemeral inventory'
+
+inputs:
+  deployment_path:
+    description: "The deployment directory or file"
+    required: true
+  node_types:
+    description: "The optional deployment node types"
+    required: false
+
+outputs:
+  inventory_path:
+    description: 'The ephemeral inventory directory or file'
+    value: ${{ steps.build-ephemeral-inventory.outputs.value }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Build ephemeral inventory
+      id: build-ephemeral-inventory
+      shell: bash
+      run: |
+        chmod a+x ${GITHUB_ACTION_PATH}/script.sh
+        echo "::add-matcher::${GITHUB_ACTION_PATH}/matcher.json"
+        node_types=$(echo "${{ inputs.node_types }}" | base64)
+        ${GITHUB_ACTION_PATH}/script.sh "${{ inputs.deployment_path }}" "${node_types}"
+        echo "::remove-matcher owner=bash-action::"

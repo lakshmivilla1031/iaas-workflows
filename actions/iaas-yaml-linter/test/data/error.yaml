@@ -1,0 +1,20 @@
+---
+test:
+  parents:
+    - parent:
+      name: parent1
+    - parent:
+      name: parent2
+    children:
+      - child:
+        name: child1
+        parents:
+          - parent:
+            name: parent1
+          - parent:
+            name: paren2
+      - child:
+        name: child2
+        parents:
+          - parent:
+            name: parent1

@@ -1,0 +1,21 @@
+---
+name: 'IAAS Ansible Workspace Action'
+description: 'Composite action used to prepare the IAAS Ansible workspace'
+inputs:
+  node_types:
+    description: "The deployment node types"
+    required: true
+outputs:
+  node-types-json:
+    description: "The list of node types as json string"
+    value: ${{ steps.node-types.outputs.value }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Return node types as a json array
+      id: node-types
+      shell: bash
+      run: |
+        chmod a+x ${GITHUB_ACTION_PATH}/script.sh
+        ${GITHUB_ACTION_PATH}/script.sh "${{ inputs.node_types }}"

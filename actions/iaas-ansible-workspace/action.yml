@@ -1,0 +1,92 @@
+---
+name: 'IAAS Ansible Workspace Action'
+description: 'Composite action used to prepare the IAAS Ansible workspace'
+inputs:
+  deployment_path:
+    description: "The inventory deployment path"
+    required: true
+  node_types:
+    description: "The optional deployment node types"
+    required: false
+  inventories_branch:
+    description: "Override the inventory repository branch"
+    required: true
+    default: "main"
+  token:
+    description: "The GitHub personal access token"
+    required: true
+  ssh_private_key:
+    description: "The SSH private key"
+    required: false
+  ansible_vault_key:
+    description: "The Ansible vault key"
+    required: true
+
+outputs:
+  inventory_path:
+    description: 'The ephemeral inventory directory or file'
+    value: ${{ steps.build-ephemeral-inventory.outputs.inventory_path }}
+  pipelines_branch:
+    description: 'The pipelines branch'
+    value: ${{ steps.pipeline-ref-format.outputs.formatted_value }}
+
+runs:
+  using: "composite"
+  steps:
+
+    - name: Deploy SSH private key
+      if: inputs.ssh_private_key != ''
+      shell: bash
+      run: |
+        if [ ! -f ~/ssh_keys/iaasops ]; then
+          echo "Creating ~/ssh_keys directory"
+          mkdir -p ~/ssh_keys
+          chmod 0700 ~/ssh_keys
+          echo "${{ inputs.ssh_private_key }}" > ~/ssh_keys/iaasops
+          chmod 0600 ~/ssh_keys/iaasops
+        fi
+
+    - name: Deploy Ansible vault key
+      shell: bash
+      run: |
+        echo "Creating Ansible vault key"
+        echo "${{ inputs.ansible_vault_key }}" > ~/.vp
+        chmod 0600 ~/.vp
+
+    - name: Checkout iaas-inventories as AnsibleInventories
+      id: checkout-inventories
+      uses: actions/checkout@v5
+      with:
+        repository: Tvlport-IAAS/iaas-inventories
+        token: ${{ inputs.token }}
+        path: AnsibleInventories
+        ref: ${{ inputs.inventories_branch }}
+
+    - name: Create ephemeral inventory
+      id: build-ephemeral-inventory
+      uses: Tvlport-IAAS/iaas-workflows/actions/iaas-ephemeral-inventory@main
+      with:
+        deployment_path: "${{ inputs.deployment_path }}"
+        node_types: "${{ inputs.node_types }}"
+
+    - name: Lookup the pipeline branch or tag reference
+      id: pipeline-ref-lookup
+      uses: Tvlport-IAAS/iaas-workflows/actions/iaas-inventory-var@main
+      with:
+        inventory_path: ${{ steps.build-ephemeral-inventory.outputs.inventory_path }}
+        variable: tp_iaas_pipe_version
+
+    - name: Format the pipeline reference for use with Github
+      id: pipeline-ref-format
+      uses: Tvlport-IAAS/iaas-workflows/actions/iaas-format-ref@main
+      with:
+        ref: ${{ fromJson(steps.pipeline-ref-lookup.outputs.json-output).msg }}
+
+    - name: Checkout iaas-source as Pipelines
+      id: checkout-pipelines
+      uses: actions/checkout@v5
+      with:
+        repository: Tvlport-IAAS/iaas-source
+        token: ${{ inputs.token }}
+        path: Pipelines
+        ref: ${{ steps.pipeline-ref-format.outputs.formatted_value }}

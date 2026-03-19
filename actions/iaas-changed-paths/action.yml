@@ -1,0 +1,58 @@
+---
+name: 'IaaS Changed Paths'
+description: 'Composite action used to output a list of all changed directories'
+inputs:
+  files:
+    description: "Check for changes using only these list of file(s) (Defaults to the entire repo)"
+    required: false
+    default: ""
+  return_depth:
+    description: "Changed paths return depth"
+    required: false
+    default: "0"  # 0 disables return depth
+  json:
+    description: "Returns json output suitable for matrix strategy"
+    required: false
+    default: 'true'
+outputs:
+  changed_paths:
+    description: "Outputs the list of changed paths"
+    value: ${{ steps.changed-paths.outputs.changed_paths }}
+  changed_files:
+    description: "Outputs the list of changed files"
+    value: ${{ steps.changed-paths.outputs.changed_files }}
+  any_changed:
+    description: "Outputs if any files have been changed"
+    value: ${{ steps.modified-files.outputs.any_changed }}
+  any_deleted:
+    description: "Outputs if any files have been deleted"
+    value: ${{ steps.modified-files.outputs.any_deleted }}
+
+runs:
+  using: "composite"
+  steps:
+
+    - name: Get modified files
+      id: modified-files
+      uses: tj-actions/changed-files@v32.1.2
+      with:
+        files: ${{ inputs.files }}
+        json: ${{ inputs.json }}
+
+    - name: Create list of changed paths
+      if: ${{ steps.modified-files.outputs.any_modified == 'true' }}
+      id: changed-paths
+      shell: bash
+      run: |
+        files_json_string=
+        if [ "${{ steps.modified-files.outputs.any_changed }}" == "true" ] ; then
+          files_json_string="${{ steps.modified-files.outputs.all_changed_files }}"
+        elif [ "${{ steps.modified-files.outputs.any_deleted }}" == "true" ] ; then
+          files_json_string="${{ steps.modified-files.outputs.deleted_files }}"
+        fi
+        chmod a+x "${GITHUB_ACTION_PATH}/script.sh"
+        output=$("${GITHUB_ACTION_PATH}/script.sh" \
+        --files_json_string "${files_json_string}" \
+        --max_depth "${{ inputs.return_depth }}")
+        echo "changed_paths=${output}" >> "$GITHUB_OUTPUT"
+        echo "changed_files=${files_json_string}" >> "$GITHUB_OUTPUT"
