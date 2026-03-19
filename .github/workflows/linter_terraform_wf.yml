@@ -1,0 +1,44 @@
+---
+name: "Terraform Linter"
+
+on:
+  workflow_call:
+    inputs:
+      workspace_list:
+        description: "The list of terraform workspaces"
+        required: true
+        type: string
+
+jobs:
+  install_run_linter:
+    if: ${{ fromJson(inputs.workspace_list) != '[]' || fromJson(inputs.workspace_list) != '' }}
+    runs-on:
+      - self-hosted
+      - testing-runner
+    strategy:
+      matrix:
+        workspace: ${{ fromJson(inputs.workspace_list) }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install linters
+        run: |
+          linter=$(which shellcheck || true)
+          if [ -z "${linter}" ] ; then
+            sudo apt install shellcheck
+          fi
+          shellcheck --version
+
+          linter=$(which tflint || true)
+          if [ -z "${linter}" ] ; then
+            curl -s https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash
+          fi
+          tflint --version
+
+      - name: Run Terraform Lint
+        run: |
+          sudo tree -a
+
+          pushd "${{ matrix.workspace }}"
+          pwd && tflint || true
+          popd

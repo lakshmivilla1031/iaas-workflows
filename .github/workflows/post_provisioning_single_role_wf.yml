@@ -1,0 +1,126 @@
+---
+name: "Post Provisioning Single Role"
+
+on:
+  workflow_call:
+    inputs:
+      namespace:
+        description: "The deployment namespace (alias)"
+        required: true
+        type: string
+      region:
+        description: "The deployment region"
+        required: true
+        type: string
+      tp_env:
+        description: "The deployment environment"
+        required: true
+        type: string
+      node_types:
+        description: "The deployment node types"
+        required: true
+        type: string
+      inventories_branch:
+        description: "Override the inventory repository branch"
+        required: false
+        type: string
+        default: "main"
+      ssh_public_keys_branch:
+        description: "Override the ssh public keys repository branch"
+        required: false
+        type: string
+        default: "main"
+      role_name:
+        description: "Role Name"
+        required: true
+        type: string
+      limits:
+        description: "Limit - Leave blank for no limits, or --limit= plus a comma delimited string of nodes to action"
+        required: false
+        type: string
+      ansible_debug:
+        description: "Choose Ansible Debug Level"
+        required: false
+        default: '-v'
+        type: string
+
+    secrets:
+      token:
+        description: "The token to use"
+        required: true
+      ssh_private_key:
+        description: "The SSH private key to use"
+        required: true
+      ansible_vault_key:
+        description: "The Ansible vault encryption key to use"
+        required: true
+
+jobs:
+  dependencies_prep:
+    name: Dependencies prep
+    runs-on:
+      - self-hosted
+      - base-runner
+    outputs:
+      runner_labels: ${{ steps.runner_labels.outputs.runner-labels-json }}
+    steps:
+      - name: Checkout this repo
+        id: checkout-workflows
+        uses: actions/checkout@v5
+
+      - name: Output the runner labels JSON array
+        id: runner_labels
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-runner-labels@main
+        with:
+          region: ${{ inputs.region }}
+
+  run_single_role:
+    name: Run Post Provisioning Single Role
+    runs-on: ${{ fromJson(needs.dependencies_prep.outputs.runner_labels) }}
+    needs: dependencies_prep
+    steps:
+      - name: Checkout this repo
+        id: checkout-workflows
+        uses: actions/checkout@v5
+
+      - name: Set deployment path
+        id: set-deployment-path
+        shell: bash
+        run: |
+          deployment_path="AnsibleInventories"
+          deployment_path+="/io/travelport/${{ inputs.tp_env }}/${{ inputs.region }}/${{ inputs.namespace }}"
+          echo "deployment_path=${deployment_path}" >> $GITHUB_OUTPUT
+
+      - name: Prepare IAAS ansible workspace
+        id: workspace-prep
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-ansible-workspace@main
+        with:
+          deployment_path: ${{ steps.set-deployment-path.outputs.deployment_path }}
+          node_types: "${{ inputs.node_types }}"
+          inventories_branch: ${{ inputs.inventories_branch }}
+          token: ${{ secrets.token }}
+          ssh_private_key: ${{ secrets.ssh_private_key }}
+          ansible_vault_key: ${{ secrets.ansible_vault_key }}
+
+      - name: Checkout ssh-public-keys repo
+        id: ssh-public-keys
+        uses: actions/checkout@v5
+        with:
+          path: ssh-public-keys
+          repository: Tvlport-IAAS/ssh-public-keys
+          token: ${{ secrets.token }}
+          ref: ${{ inputs.ssh_public_keys_branch }}
+
+      - name: Run Single Role playbook
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-ansible-run@main
+        with:
+          inventory_path: "${{ steps.workspace-prep.outputs.inventory_path }}"
+          node_types: "${{ inputs.node_types }}"
+          playbook: "Pipelines/playbooks/customer/post-provisioning/PostProvisioning-single-role.yml"
+          limits: ${{ inputs.limits }}
+          extra-vars: "--extra-vars \"runrole='${{ inputs.role_name }}'\""
+          ansible_debug: ${{ inputs.ansible_debug }}
+
+      - name: Cleanup private keys
+        id: cleanup-keys
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-keys-cleanup@main

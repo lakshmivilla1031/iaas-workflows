@@ -1,0 +1,145 @@
+---
+name: "Build ASG Workload"
+
+on:
+  workflow_call:
+    inputs:
+      namespace:
+        description: "The deployment namespace (alias)"
+        required: true
+        type: string
+      region:
+        description: "The deployment region"
+        type: string
+        required: true
+      tp_env:
+        description: "The deployment environment"
+        type: string
+        required: true
+      node_types:
+        description: "The deployment node types"
+        required: true
+        type: string
+      inventories_branch:
+        description: "Override the inventory repository branch"
+        required: true
+        type: string
+      state_branch:
+        description: "Override the iaas-state-branch repository branch"
+        required: true
+        type: string
+        default: "staging"
+      ansible_debug:
+        description: "Choose Ansible Debug Level"
+        required: true
+        default: '-v'
+        type: string
+
+    secrets:
+      token:
+        description: "The token to use"
+        required: true
+      ansible_vault_key:
+        description: "The Ansible vault encryption key to use"
+        required: true
+
+jobs:
+  build_scale_plan_run:
+    name: Run build scale plan
+    runs-on:
+      - self-hosted
+      - aws-eks
+      - ansible-runner
+    steps:
+      - name: Checkout this repo
+        id: checkout-workflows
+        uses: actions/checkout@v5
+
+      - name: Set deployment path
+        id: set-deployment-path
+        shell: bash
+        run: |
+          deployment_path="io/travelport/${{ inputs.tp_env }}/${{ inputs.region }}/${{ inputs.namespace }}"
+          echo "deployment_path=${deployment_path}" >> $GITHUB_OUTPUT
+
+      - name: Prepare IAAS ansible workspace
+        id: workspace-prep
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-ansible-workspace@main
+        with:
+          deployment_path: "AnsibleInventories/${{ steps.set-deployment-path.outputs.deployment_path }}"
+          node_types: "${{ inputs.node_types }}"
+          inventories_branch: ${{ inputs.inventories_branch }}
+          token: ${{ secrets.token }}
+          ansible_vault_key: ${{ secrets.ansible_vault_key }}
+
+      - name: Checkout iaas-app-state repo
+        id: checkout-iaas-app-state
+        uses: actions/checkout@v5
+        with:
+          repository: Tvlport-IAAS/iaas-app-state
+          token: ${{ secrets.token }}
+          path: terraform_working
+          ref: ${{ inputs.state_branch }}
+
+      - name: Prepare cloud provider
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-ansible-run@main
+        with:
+          inventory_path: "${{ steps.workspace-prep.outputs.inventory_path }}"
+          node_types: "${{ inputs.node_types }}"
+          playbook: "Pipelines/playbooks/customer/cloud_providers/CloudProvider.yml"
+          ansible_debug: ${{ inputs.ansible_debug }}
+
+      - name: Run build scale plan
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-ansible-run@main
+        with:
+          inventory_path: "${{ steps.workspace-prep.outputs.inventory_path }}"
+          node_types: "${{ inputs.node_types }}"
+          playbook: "Pipelines/playbooks/customer/autoscale_providers/ScalePlan.yml"
+          ansible_debug: ${{ inputs.ansible_debug }}
+
+      - name: Write deployment manifest
+        id: create-manifest
+        shell: bash
+        run: |
+          workspace="${{ github.workspace }}/terraform_working/"
+          path="${{ steps.set-deployment-path.outputs.deployment_path }}"
+          file="${workspace}/${path}/deployment_manifest.yml"
+          echo "---" > $file
+          echo "manifest:" >> $file
+          echo "  deployment:" >> $file
+          echo "    path: \"${path}\"" >> $file
+          echo "    inputs:" >> $file
+          echo "      namespace: \"${{ inputs.namespace }}\"" >> $file
+          echo "      region: \"${{ inputs.region }}\"" >> $file
+          echo "      tp_env: \"${{ inputs.tp_env }}\"" >> $file
+          echo "      node_types: \"${{ inputs.node_types }}\"" >> $file
+          echo "      inventories_branch: \"${{ inputs.inventories_branch }}\"" >> $file
+          echo "      state_branch: \"${{ inputs.state_branch }}\"" >> $file
+          echo "      run_post_provisioning: \"false\"" >> $file
+          echo "      ansible_debug: \"${{ inputs.ansible_debug }}\"" >> $file
+          echo "    github:" >> $file
+          echo "      workflow: \"${{ github.workflow }}\"" >> $file
+          echo "      run_number: \"${{ github.run_number }}\"" >> $file
+          echo "      actor: \"${{ github.actor }}\"" >> $file
+
+      - name: Build commit message
+        id: commit-message
+        shell: bash
+        run: |
+          repo=$(echo "${{ github.repository }}" | cut -d '/' -f2)
+          message="${repo}#${{ github.run_number }} - TF working push to staging"
+          echo "message=${message}" >> $GITHUB_OUTPUT
+
+      - name: Push changes to state repo on ${{ inputs.state_branch }} branch
+        id: push-iaas-app-state
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-git-push@main
+        with:
+          commit_message: "${{ steps.commit-message.outputs.message }}"
+          path: ./terraform_working
+          destination_branch: ${{ inputs.state_branch }}
+          access_token: ${{ secrets.token }}
+          force: true
+
+      - name: Cleanup private keys
+        id: cleanup-keys
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-keys-cleanup@main

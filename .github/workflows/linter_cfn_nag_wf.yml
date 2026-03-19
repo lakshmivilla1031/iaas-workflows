@@ -1,0 +1,45 @@
+---
+name: "CFN Nag Linter"
+
+on:
+  workflow_call:
+    inputs:
+      files:
+        description: "The list of terraform files"
+        required: true
+        type: string
+
+jobs:
+  cfn_nag_linter:
+    name: CFN Nag Linter
+    if: ${{ fromJson(inputs.files) != '[]' || fromJson(inputs.files) != '' }}
+    runs-on:
+      - self-hosted
+      - base-runner
+
+    strategy:
+      matrix:
+        file: ${{ fromJson(inputs.files) }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Parse cfn template from terraform file
+        id: cfn_template
+        shell: bash
+        run: |
+          lines=$(cat ${{ matrix.file }} | wc -l)
+          cfn_file="$(echo ${{ matrix.file }} | cut -d '.' -f1).cfn"
+          grep -A$lines "<<-EOT" ${{ matrix.file }} | grep -B$lines " EOT" | grep -v "EOT" > $cfn_file
+          echo "file=${cfn_file}" >> $GITHUB_OUTPUT
+
+      - name: Run cfn nag linter
+        uses: stelligent/cfn_nag@v0.8.10
+        with:
+          input_path: ${{ steps.cfn_template.outputs.file }}
+          extra_args: --fail-on-warnings -o json
+
+      - name: Remove cfn template
+        if: always()
+        shell: bash
+        run: |
+          rm -f ${{ steps.cfn_template.outputs.file }}

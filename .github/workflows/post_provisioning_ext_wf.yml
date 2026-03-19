@@ -1,0 +1,160 @@
+---
+name: "Post Provisioning Extensions"
+
+on:
+  workflow_call:
+    inputs:
+      namespace:
+        description: "The deployment namespace (alias)"
+        required: true
+        type: string
+      region:
+        description: "The deployment region"
+        required: true
+        type: string
+      tp_env:
+        description: "The deployment environment"
+        required: true
+        type: string
+      node_types:
+        description: "The deployment node types"
+        required: true
+        type: string
+      ansible_playbook_override:
+        description: "Override the post-provisioning ansible playbook"
+        required: false
+        default: "no playbook override"
+        type: string
+      inventories_branch:
+        description: "Override the inventory repository branch"
+        required: false
+        type: string
+        default: "main"
+      limits:
+        description: "Limit - Leave blank for no limits, or --limit= plus a comma delimited string of nodes to action"
+        required: false
+        type: string
+      extra-vars:
+        description: "Extra Vars - Leave blank, or --extra-vars \"foo=bar\""
+        required: false
+        type: string
+      ansible_debug:
+        description: "Choose Ansible Debug Level"
+        required: false
+        default: '-v'
+        type: string
+
+    secrets:
+      token:
+        description: "The token to use"
+        required: true
+      ssh_private_key:
+        description: "The SSH private key to use"
+        required: true
+      ansible_vault_key:
+        description: "The Ansible vault encryption key to use"
+        required: true
+
+jobs:
+  dependencies_prep:
+    name: Dependencies prep
+    runs-on:
+      - self-hosted
+      - base-runner
+    outputs:
+      runner_labels: ${{ steps.runner_labels.outputs.runner-labels-json }}
+    steps:
+      - name: Checkout this repo
+        id: checkout-workflows
+        uses: actions/checkout@v5
+
+      - name: Output the runner labels JSON array
+        id: runner_labels
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-runner-labels@main
+        with:
+          region: ${{ inputs.region }}
+
+  post_provisioning_run:
+    name: Post provisioning run
+    runs-on: ${{ fromJson(needs.dependencies_prep.outputs.runner_labels) }}
+    environment: ${{ inputs.tp_env }}
+    needs: dependencies_prep
+    steps:
+      - name: Checkout this repo
+        id: checkout-workflows
+        uses: actions/checkout@v5
+
+      - name: Set deployment path
+        id: set-deployment-path
+        shell: bash
+        run: |
+          deployment_path="AnsibleInventories"
+          deployment_path+="/io/travelport/${{ inputs.tp_env }}/${{ inputs.region }}/${{ inputs.namespace }}"
+          echo "deployment_path=${deployment_path}" >> $GITHUB_OUTPUT
+
+      - name: Prepare IAAS ansible workspace
+        id: workspace-prep
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-ansible-workspace@main
+        with:
+          deployment_path: ${{ steps.set-deployment-path.outputs.deployment_path }}
+          node_types: "${{ inputs.node_types }}"
+          inventories_branch: ${{ inputs.inventories_branch }}
+          token: ${{ secrets.token }}
+          ssh_private_key: ${{ secrets.ssh_private_key }}
+          ansible_vault_key: ${{ secrets.ansible_vault_key }}
+
+      - name: Lookup post provisioning extensions
+        id: post_provisioning_extensions
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-inventory-var@main
+        with:
+          inventory_path: "${{ steps.workspace-prep.outputs.inventory_path }}"
+          variable: post_provisioning_extensions
+
+      - name: Set the post-provisioning repo, branch and ansible playbook
+        id: set-vars
+        shell: bash
+        run: |
+          repo="$(echo ${{ fromJson(steps.post_provisioning_extensions.outputs.json-output).msg[0].repoUrl }} | \
+          cut -d '/' -f4,5 | cut -d '.' -f1)"
+          echo "repo=${repo}"
+          echo "repo=${repo}" >> $GITHUB_OUTPUT
+
+          branch="${{ fromJson(steps.post_provisioning_extensions.outputs.json-output).msg[0].branch }}"
+          echo "branch=${branch}"
+          echo "branch=${branch}" >> $GITHUB_OUTPUT
+
+          if [ "${{ inputs.ansible_playbook_override }}" == "no playbook override" ]  ; then
+            playbook="${{ fromJson(steps.post_provisioning_extensions.outputs.json-output).msg[0].ansiblePlaybook }}"
+          else
+            playbook="${{ inputs.ansible_playbook_override }}"
+          fi
+          echo "playbook=${playbook}"
+          echo "playbook=${playbook}" >> $GITHUB_OUTPUT
+
+          path=$(echo "${repo}" | cut -d "/" -f2)
+          echo "path=${path}" >> $GITHUB_OUTPUT
+
+      - name: Checkout post provisioning repo
+        if: steps.set-vars.outputs.repo != ''
+        id: checkout-post-provisioning
+        uses: actions/checkout@v5
+        with:
+          repository: "${{ steps.set-vars.outputs.repo }}"
+          token: "${{ secrets.token }}"
+          ref: "${{ steps.set-vars.outputs.branch }}"
+          path: "${{ steps.set-vars.outputs.path }}"
+
+      - name: Run post provisioning playbook
+        if: steps.set-vars.outputs.repo != ''
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-ansible-run@main
+        with:
+          inventory_path: "${{ steps.workspace-prep.outputs.inventory_path }}"
+          node_types: "${{ inputs.node_types }}"
+          playbook: ${{ steps.set-vars.outputs.path }}/${{ steps.set-vars.outputs.playbook }}
+          limits: ${{ inputs.limits }}
+          extra-vars: ${{ inputs.extra-vars }}
+          ansible_debug: ${{ inputs.ansible_debug }}
+
+      - name: Cleanup private keys
+        id: cleanup-keys
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-keys-cleanup@main

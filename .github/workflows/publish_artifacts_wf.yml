@@ -1,0 +1,155 @@
+---
+name: "Publish Artifacts"
+
+on:
+  workflow_call:
+    inputs:
+      namespace:
+        description: "The deployment namespace (alias)"
+        required: true
+        type: string
+      region:
+        description: "The deployment region"
+        type: string
+        required: true
+      tp_env:
+        description: "The deployment environment"
+        type: string
+      node_types:
+        description: "The deployment node types"
+        required: true
+        type: string
+      inventories_branch:
+        description: "Override the inventory repository branch"
+        required: true
+        type: string
+      artifact_list:
+        description: "The list of artifacts to publish"
+        type: string
+        default: 'all'
+      ansible_debug:
+        description: "Choose Ansible Debug Level"
+        required: true
+        default: '-v'
+        type: string
+
+    secrets:
+      token:
+        description: "The token to use"
+        required: true
+      ansible_vault_key:
+        description: "The Ansible vault encryption key to use"
+        required: true
+
+jobs:
+  dependencies_prep:
+    name: Dependencies prep
+    runs-on:
+      - self-hosted
+      - base-runner
+    outputs:
+      node-types: ${{ steps.node-types.outputs.node-types-json }}
+    steps:
+      - name: Checkout this repo
+        id: checkout-workflows
+        uses: actions/checkout@v5
+
+      - name: Output node-types as json string array
+        id: node-types
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-node-types@main
+        with:
+          node_types: ${{ inputs.node_types }}
+
+  run_publish_artifacts:
+    name: Run publish artifacts
+    runs-on:
+      - self-hosted
+      - aws-eks
+      - ansible-runner
+    needs: dependencies_prep
+    strategy:
+      matrix:
+        node_type: ${{ fromJson(needs.dependencies_prep.outputs.node-types) }}
+    steps:
+      - name: Checkout this repo
+        id: checkout-workflows
+        uses: actions/checkout@v5
+
+      - name: Set deployment path
+        id: set-deployment-path
+        shell: bash
+        run: |
+          deployment_path="AnsibleInventories"
+          deployment_path+="/io/travelport/${{ inputs.tp_env }}/${{ inputs.region }}/${{ inputs.namespace }}"
+          deployment_path+="/${{ matrix.node_type }}.yml"
+          echo "deployment_path=${deployment_path}" >> $GITHUB_OUTPUT
+
+      - name: Prepare IAAS ansible workspace
+        id: workspace-prep
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-ansible-workspace@main
+        with:
+          deployment_path: ${{ steps.set-deployment-path.outputs.deployment_path }}
+          inventories_branch: ${{ inputs.inventories_branch }}
+          token: ${{ secrets.token }}
+          ansible_vault_key: ${{ secrets.ansible_vault_key }}
+
+      - name: Lookup post provisioning extensions
+        id: post_provisioning_extensions
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-inventory-var@main
+        with:
+          inventory_path: "${{ steps.workspace-prep.outputs.inventory_path }}"
+          variable: post_provisioning_extensions
+
+      - name: Set the post-provisioning repo, branch and ansible playbook
+        id: set-vars
+        shell: bash
+        run: |
+          repo="$(echo ${{ fromJson(steps.post_provisioning_extensions.outputs.json-output).msg[0].repoUrl }} | \
+          cut -d '/' -f4,5 | cut -d '.' -f1)"
+          echo "repo=${repo}"
+          echo "repo=${repo}" >> $GITHUB_OUTPUT
+
+          branch="${{ fromJson(steps.post_provisioning_extensions.outputs.json-output).msg[0].branch }}"
+          echo "branch=${branch}"
+          echo "branch=${branch}" >> $GITHUB_OUTPUT
+
+          if [ "${{ inputs.ansible_playbook_override }}" == "no playbook override" ]  ; then
+            playbook="${{ fromJson(steps.post_provisioning_extensions.outputs.json-output).msg[0].ansiblePlaybook }}"
+          else
+            playbook="${{ inputs.ansible_playbook_override }}"
+          fi
+          echo "playbook=${playbook}"
+          echo "playbook=${playbook}" >> $GITHUB_OUTPUT
+
+          path=$(echo "${repo}" | cut -d "/" -f2)
+          echo "path=${path}" >> $GITHUB_OUTPUT
+
+      - name: Checkout post provisioning repo
+        id: checkout-post-provisioning
+        uses: actions/checkout@v5
+        with:
+          repository: "${{ steps.set-vars.outputs.repo }}"
+          token: "${{ secrets.token }}"
+          ref: "${{ steps.set-vars.outputs.branch }}"
+          path: "${{ steps.set-vars.outputs.path }}"
+
+      - name: Publish all artifacts
+        if: ${{ inputs.artifact_list == 'all' }}
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-ansible-run@main
+        with:
+          inventory_path: "${{ steps.workspace-prep.outputs.inventory_path }}"
+          playbook: "Pipelines/playbooks/artifact/PublishArtifacts.yml"
+          ansible_debug: ${{ inputs.ansible_debug }}
+
+      - name: Publish artifacts list
+        if: ${{ inputs.artifact_list != 'all' }}
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-ansible-run@main
+        with:
+          inventory_path: "${{ steps.workspace-prep.outputs.inventory_path }}"
+          playbook: "Pipelines/playbooks/artifact/PublishArtifacts.yml"
+          extra-vars: "--extra-vars \"artifact_list=${{ inputs.artifact_list }}\""
+          ansible_debug: ${{ inputs.ansible_debug }}
+
+      - name: Cleanup private keys
+        id: cleanup-keys
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-keys-cleanup@main

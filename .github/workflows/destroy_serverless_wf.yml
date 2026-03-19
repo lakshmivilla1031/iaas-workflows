@@ -1,0 +1,143 @@
+---
+name: "Destroy Serverless Workload"
+
+on:
+  workflow_call:
+    inputs:
+      namespace:
+        description: "The deployment namespace (alias)"
+        required: true
+        type: string
+      region:
+        description: "The deployment region"
+        type: string
+        required: true
+      tp_env:
+        description: "The deployment environment"
+        type: string
+        required: true
+      node_types:
+        description: "The deployment node type"
+        required: true
+        type: string
+      inventories_branch:
+        description: "Override the inventory repository branch"
+        required: true
+        type: string
+      state_branch:
+        description: "Override the iaas-state-branch repository branch"
+        required: true
+        type: string
+        default: "staging"
+      ansible_debug:
+        description: "Choose Ansible Debug Level"
+        required: true
+        default: '-v'
+        type: string
+
+    secrets:
+      token:
+        description: "The token to use"
+        required: true
+      ansible_vault_key:
+        description: "The Ansible vault encryption key to use"
+        required: true
+
+jobs:
+  workflow_environment:
+    name: Lookup the workflow environment
+    runs-on:
+      - self-hosted
+      - ansible-runner
+    outputs:
+      major_env: ${{ steps.workflow_env.outputs.major_env }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Output the workflow environment
+        id: workflow_env
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-major-env@main
+        with:
+          tp_env: "${{ inputs.tp_env }}"
+
+  destroy_run:
+    name: Run destroy
+    runs-on:
+      - self-hosted
+      - ansible-runner
+    needs: workflow_environment
+    environment: ${{ needs.workflow_environment.outputs.major_env }}
+    steps:
+      - name: Checkout this repo
+        id: checkout-workflows
+        uses: actions/checkout@v5
+
+      - name: Set deployment path
+        id: set-deployment-path
+        shell: bash
+        run: |
+          deployment_path="io/travelport/${{ inputs.tp_env }}/${{ inputs.region }}/${{ inputs.namespace }}"
+          echo "deployment_path=${deployment_path}" >> $GITHUB_OUTPUT
+
+      - name: Prepare IAAS ansible workspace
+        id: workspace-prep
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-ansible-workspace@main
+        with:
+          deployment_path: "AnsibleInventories/${{ steps.set-deployment-path.outputs.deployment_path }}"
+          node_types: "${{ inputs.node_types }}"
+          inventories_branch: ${{ inputs.inventories_branch }}
+          token: ${{ secrets.token }}
+          ansible_vault_key: ${{ secrets.ansible_vault_key }}
+
+      - name: Lookup the cloud provider
+        id: cloud-provider
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-inventory-var@main
+        with:
+          inventory_path: ${{ steps.workspace-prep.outputs.inventory_path }}
+          variable: tp_cloud_provider
+
+      - name: Checkout iaas-app-state repo as terraform_working
+        if: ${{ fromJson(steps.cloud-provider.outputs.json-output).msg == 'amazon' }}
+        id: checkout-iaas-app-state
+        uses: actions/checkout@v5
+        with:
+          repository: Tvlport-IAAS/iaas-app-state
+          token: ${{ secrets.token }}
+          path: terraform_working
+          ref: ${{ inputs.state_branch }}
+
+      - name: Remove terraform files
+        id: remove-terraform-files
+        shell: bash
+        run: |
+          workspace="${{ github.workspace }}/terraform_working/"
+          path="io/travelport/${{ inputs.tp_env }}/${{ inputs.region }}/"
+          path+="${{ inputs.namespace }}/serverless/${{ inputs.node_types }}"
+          rm ${workspace}/${path}/main.tf
+          rm ${workspace}/${path}/variables.tf
+          rm ${workspace}/${path}/terraform.tfvars
+
+      - name: Build commit message
+        id: commit-message
+        shell: bash
+        run: |
+          repo=$(echo "${{ github.repository }}" | cut -d '/' -f2)
+          message="${repo}#${{ github.run_number }} - TF working push to staging"
+          echo "message=${message}" >> $GITHUB_OUTPUT
+
+      - name: Push changes to state repo on ${{ inputs.state_branch }} branch
+        id: push-iaas-app-state
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-git-push@main
+        with:
+          commit_message: "${{ steps.commit-message.outputs.message }}"
+          path: ./terraform_working
+          destination_branch: ${{ inputs.state_branch }}
+          access_token: ${{ secrets.token }}
+          force: true
+
+      - name: Cleanup private keys
+        id: cleanup-keys
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-keys-cleanup@main

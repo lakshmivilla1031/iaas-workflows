@@ -1,0 +1,126 @@
+---
+name: "Prepare Firewall"
+run-name: "${{ inputs.deployment_path }} prepare firewall"
+
+on:
+  workflow_call:
+    inputs:
+      deployment_path:
+        description: The deployment path
+        type: string
+        required: true
+      inventories_branch:
+        description: The inventories branch
+        default: main
+        type: string
+      state_branch:
+        description: The iaas-state branch
+        default: staging
+        type: string
+    secrets:
+      token:
+        description: "The github token"
+        required: true
+      ansible_vault_key:
+        description: "The Ansible vault encryption key to use"
+        required: true
+
+jobs:
+  dependencies_prep:
+    name: Prepare dependencies
+    runs-on:
+      - self-hosted
+      - base-runner
+    outputs:
+      runner_env: ${{ steps.runner_env.outputs.major_env }}
+    steps:
+
+      - name: Set variables
+        id: set-vars
+        shell: bash
+        run: |
+          tp_env=$(echo "${{ inputs.deployment_path }}" | cut -d '/' -f3)
+          echo "tp_env=${tp_env}" >> $GITHUB_OUTPUT
+
+      - name: Output the runner environment
+        id: runner_env
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-major-env@main
+        with:
+          tp_env: ${{ steps.set-vars.outputs.tp_env }}
+
+  run_prepare_firewall:
+    name: ${{ inputs.deployment_path }} prepare firewall
+    needs:
+      - dependencies_prep
+    runs-on:
+      #      - self-hosted
+      #      - toolkit-runner
+      - self-hosted
+      - "${{ needs.dependencies_prep.outputs.runner_env }}"
+      - onprem
+      - toolkit
+      - podman
+    steps:
+      - name: Checkout this repo
+        id: checkout-workflows
+        uses: actions/checkout@v5
+
+      - name: Prepare IAAS ansible workspace
+        id: workspace-prep
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-ansible-workspace@main
+        with:
+          deployment_path: "${{ inputs.deployment_path }}"
+          inventories_branch: ${{ inputs.inventories_branch }}
+          token: ${{ secrets.token }}
+          ansible_vault_key: ${{ secrets.ansible_vault_key }}
+
+      - name: Checkout iaas-state repo
+        id: checkout-iaas-state
+        uses: actions/checkout@v5
+        with:
+          repository: Tvlport-IAAS/iaas-state
+          token: ${{ secrets.token }}
+          path: terraform_working
+          ref: ${{ inputs.state_branch }}
+
+      - name: Run build deployment module
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-ansible-run@main
+        with:
+          inventory_path: "${{ steps.workspace-prep.outputs.inventory_path }}"
+          node_types: "${{ inputs.node_types }}"
+          playbook: "Pipelines/playbooks/customer/firewall_providers/FirewallCompleteRules.yml"
+          ansible_debug: ${{ inputs.ansible_debug }}
+
+      - name: Push firewall priority changes to AnsibleInventories repo on main branch
+        id: push-firewall-priority
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-git-push@main
+        with:
+          commit_message: "Firewall priority changed on run #${{ github.run_number }}"
+          path: ./AnsibleInventories/environments
+          file_patterns: "*-firewall-priorities.json"
+          destination_branch: ${{ inputs.inventories_branch }}
+          access_token: ${{ secrets.token }}
+
+      - name: Push firewall rule changes to AnsibleInventories repo on main branch
+        id: push-iaas-inventories
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-git-push@main
+        with:
+          commit_message: "FirewallCompleteRules commit ${{ inputs.deployment_path }} on run #${{ github.run_number }}"
+          path: ./AnsibleInventories/${{ inputs.deployment_path }}
+          file_patterns: "*.csv *_dbedit.txt"
+          destination_branch: ${{ inputs.inventories_branch }}
+          access_token: ${{ secrets.token }}
+
+      - name: Push changes to state repo on main branch
+        id: push-iaas-app-state
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-git-push@main
+        with:
+          commit_message: "Terraform firewall rules changed during run #${{ github.run_number }}"
+          path: ./terraform_working
+          file_patterns: "*.tf *.json"
+          destination_branch: ${{ inputs.state_branch }}
+          access_token: ${{ secrets.token }}
+
+      - name: Cleanup private keys
+        id: cleanup-keys
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-keys-cleanup@main

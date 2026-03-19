@@ -1,0 +1,128 @@
+---
+name: "Run OS Config Task"
+
+on:
+  workflow_call:
+    inputs:
+      namespace:
+        description: "The deployment namespace (alias)"
+        required: true
+        type: string
+      region:
+        description: "The deployment region"
+        required: true
+        type: string
+      tp_env:
+        description: "The deployment environment"
+        required: true
+        type: string
+      node_types:
+        description: "The deployment node types"
+        required: true
+        type: string
+      run_this_task:
+        description: "Run this OS Config task. 'main' will run all eligible."
+        required: true
+        type: string
+      inventories_branch:
+        description: "Override the inventory repository branch"
+        required: false
+        type: string
+        default: "main"
+      limits:
+        description: "Limit - Leave blank for no limits, or --limit= plus a comma delimited string of nodes to action"
+        required: false
+        type: string
+      extra_vars:
+        description: "Extra Vars - Leave blank, or --extra-vars \"foo=bar\""
+        required: false
+        type: string
+      ansible_debug:
+        description: "Choose Ansible Debug Level"
+        required: false
+        default: '-v'
+        type: string
+
+    secrets:
+      token:
+        description: "The token to use"
+        required: true
+      ssh_private_key:
+        description: "The SSH private key to use"
+        required: true
+      ansible_vault_key:
+        description: "The Ansible vault encryption key to use"
+        required: true
+
+jobs:
+  dependencies_prep:
+    name: Dependencies prep
+    runs-on:
+      - self-hosted
+      - base-runner
+    outputs:
+      runner_labels: ${{ steps.runner_labels.outputs.runner-labels-json }}
+    steps:
+      - name: Checkout this repo
+        id: checkout-workflows
+        uses: actions/checkout@v5
+
+      - name: Output the runner labels JSON array
+        id: runner_labels
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-runner-labels@main
+        with:
+          region: ${{ inputs.region }}
+
+  run_os_task:
+    name: Run OS task
+    runs-on: ${{ fromJson(needs.dependencies_prep.outputs.runner_labels) }}
+    needs: dependencies_prep
+    steps:
+      - name: Checkout this repo
+        id: checkout-workflows
+        uses: actions/checkout@v5
+
+      - name: Set deployment path
+        id: set-deployment-path
+        shell: bash
+        run: |
+          deployment_path="AnsibleInventories"
+          deployment_path+="/io/travelport/${{ inputs.tp_env }}/${{ inputs.region }}/${{ inputs.namespace }}"
+          echo "deployment_path=${deployment_path}" >> $GITHUB_OUTPUT
+
+      - name: Prepare IAAS ansible workspace
+        id: workspace-prep
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-ansible-workspace@main
+        with:
+          deployment_path: ${{ steps.set-deployment-path.outputs.deployment_path }}
+          node_types: "${{ inputs.node_types }}"
+          inventories_branch: ${{ inputs.inventories_branch }}
+          token: ${{ secrets.token }}
+          ssh_private_key: ${{ secrets.ssh_private_key }}
+          ansible_vault_key: ${{ secrets.ansible_vault_key }}
+
+      - name: Run OS configuration playbook
+        if: inputs.run_this_task == 'all'
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-ansible-run@main
+        with:
+          inventory_path: "${{ steps.workspace-prep.outputs.inventory_path }}"
+          node_types: "${{ inputs.node_types }}"
+          playbook: "Pipelines/playbooks/os/os_configuration.yml"
+          limits: ${{ inputs.limits }}
+          extra-vars: "{{ inputs.extra_vars }}"
+          ansible_debug: ${{ inputs.ansible_debug }}
+
+      - name: Run OS configuration playbook
+        if: inputs.run_this_task != 'all'
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-ansible-run@main
+        with:
+          inventory_path: "${{ steps.workspace-prep.outputs.inventory_path }}"
+          node_types: "${{ inputs.node_types }}"
+          playbook: "Pipelines/playbooks/os/os_single_config_task.yml"
+          limits: ${{ inputs.limits }}
+          extra-vars: "--extra-vars \"runtask='${{ inputs.run_this_task }}'\" ${{ inputs.extra_vars }}"
+          ansible_debug: ${{ inputs.ansible_debug }}
+
+      - name: Cleanup private keys
+        id: cleanup-keys
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-keys-cleanup@main

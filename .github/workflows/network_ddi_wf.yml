@@ -1,0 +1,124 @@
+---
+name: "Network DDI"
+
+on:
+  workflow_call:
+    inputs:
+      namespace:
+        description: "The deployment namespace (alias)"
+        required: true
+        type: string
+      region:
+        description: "The deployment region"
+        type: string
+        required: true
+      tp_env:
+        description: "The deployment environment"
+        type: string
+        required: true
+      node_types:
+        description: "The deployment node types"
+        required: true
+        type: string
+      inventories_branch:
+        description: "Override the inventory repository branch"
+        required: true
+        type: string
+      ansible_debug:
+        description: "Choose Ansible Debug Level"
+        required: true
+        default: '-v'
+        type: string
+    secrets:
+      token:
+        description: "The token to use"
+        required: true
+      ansible_vault_key:
+        description: "The Ansible vault encryption key to use"
+        required: true
+
+jobs:
+  dependencies_prep:
+    name: Dependencies prep
+    runs-on:
+      - self-hosted
+      - base-runner
+    outputs:
+      runner_env: ${{ steps.runner_env.outputs.major_env }}
+    steps:
+      - name: Checkout this repo
+        id: checkout-workflows
+        uses: actions/checkout@v5
+
+      - name: Output the runner environment
+        id: runner_env
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-major-env@main
+        with:
+          tp_env: ${{ inputs.tp_env }}
+
+  run_ddi:
+    name: Run ddi on workload
+    runs-on:
+      - self-hosted
+      - toolkit-runner
+    needs: dependencies_prep
+    steps:
+      - name: Checkout this repo
+        id: checkout-workflows
+        uses: actions/checkout@v5
+
+      - name: Set deployment path
+        id: set-deployment-path
+        shell: bash
+        run: |
+          deployment_path="io/travelport/${{ inputs.tp_env }}/${{ inputs.region }}/${{ inputs.namespace }}"
+          echo "deployment_path=${deployment_path}" >> $GITHUB_OUTPUT
+
+      - name: Deploy Ansible vault key
+        shell: bash
+        run: |
+          if [ ! -f ~/.vp ]; then
+            echo "Creating Ansible vault key"
+            echo "${{ secrets.ansible_vault_key }}" > ~/.vp
+            chmod 0600 ~/.vp
+          fi
+
+      - name: Prepare IAAS ansible workspace
+        id: workspace-prep
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-ansible-workspace@main
+        with:
+          deployment_path: "AnsibleInventories/${{ steps.set-deployment-path.outputs.deployment_path }}"
+          node_types: "${{ inputs.node_types }}"
+          inventories_branch: ${{ inputs.inventories_branch }}
+          token: ${{ secrets.token }}
+
+      - name: Perform Network DDI Operations
+        if: ${{ !inputs.remove_ddi }}
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-ansible-run@main
+        with:
+          inventory_path: "${{ steps.workspace-prep.outputs.inventory_path }}"
+          node_types: "${{ inputs.node_types }}"
+          playbook: "Pipelines/playbooks/infrastructure/ddi_providers/IPAMComplete.yml"
+          ansible_debug: ${{ inputs.ansible_debug }}
+
+      - name: Build commit message
+        id: commit-message
+        shell: bash
+        run: |
+          repo=$(echo "${{ github.repository }}" | cut -d '/' -f2)
+          message="${repo}#${{ github.run_number }} - TF working push to staging"
+          echo "message=${message}" >> $GITHUB_OUTPUT
+
+      - name: Push changes to state repo on ${{ inputs.state_branch }} branch
+        id: push-iaas-app-state
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-git-push@main
+        with:
+          commit_message: "${{ steps.commit-message.outputs.message }}"
+          path: ./terraform_working
+          destination_branch: ${{ inputs.state_branch }}
+          access_token: ${{ secrets.token }}
+          force: true
+
+      - name: Cleanup private keys
+        id: cleanup-keys
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-keys-cleanup@main

@@ -1,0 +1,50 @@
+---
+name: "Ansible Linter"
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  run_ansible_linter:
+    runs-on:
+      - self-hosted
+      - testing-runner
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install linters
+        run: |
+          export PATH=$PATH:/home/runner/.local/bin
+          linter=$(which ansible-lint || true)
+          if [ -z "${linter}" ] ; then
+            python3 -m pip install --user ansible-lint
+          fi
+          ansible-lint --version
+
+      - name: Get changed files
+        id: changed-files
+        uses: tj-actions/changed-files@v46
+        with:
+          files: "**/*.yml"
+          fetch-depth: 0
+
+      - name: Run Ansible-Lint
+        run: |
+          export PATH=$PATH:/home/runner/.local/bin
+          LINTLIST=${{ steps.changed-files.outputs.any_changed }}
+          echo "-----------ANSIBLELINT---------------------"
+          echo "Ansible-Linter running, config file at we are checking the following list: \"$LINTLIST\" "
+          echo "Documentation: https://ansible-lint.readthedocs.io/en/latest/"
+          TERM=dumb ansible-lint --nocolor $LINTLIST || true
+          RC=$?
+          if [ $RC -eq 0 ]; then
+            echo "ansible-lint return code 0, (yaml good, and linting reported good)"
+          elif [ $RC -eq 1 ]; then
+            echo "ansible-lint return code 1, (yaml reported invalid)"
+          elif [ $RC -eq 2 ]; then
+            echo "ansible-lint return code 2, (yaml good, and linting reporting invalid)"
+          else
+            echo "ERROR ansible-lint return code, not caught/expected, return code: $RC"
+          fi

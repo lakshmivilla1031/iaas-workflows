@@ -1,0 +1,196 @@
+---
+name: "Post Provisioning IaaS"
+
+on:
+  workflow_call:
+    inputs:
+      namespace:
+        description: "The deployment namespace (alias)"
+        required: true
+        type: string
+      region:
+        description: "The deployment region"
+        required: true
+        type: string
+      tp_env:
+        description: "The deployment environment"
+        required: true
+        type: string
+      node_types:
+        description: "The deployment node types"
+        required: true
+        type: string
+      inventories_branch:
+        description: "Override the inventory repository branch"
+        required: false
+        type: string
+        default: "main"
+      limits:
+        description: "Limit - Leave blank for no limits, or --limit= plus a comma delimited string of nodes to action"
+        required: false
+        type: string
+      ansible_debug:
+        description: "Choose Ansible Debug Level"
+        required: false
+        default: '-v'
+        type: string
+
+    secrets:
+      token:
+        description: "The token to use"
+        required: true
+      ssh_private_key:
+        description: "The SSH private key to use"
+        required: true
+      ansible_vault_key:
+        description: "The Ansible vault encryption key to use"
+        required: true
+
+jobs:
+  dependencies_prep:
+    name: Dependencies prep
+    runs-on:
+      - self-hosted
+      - base-runner
+    outputs:
+      runner_labels: ${{ steps.runner_labels.outputs.runner-labels-json }}
+    steps:
+      - name: Checkout this repo
+        id: checkout-workflows
+        uses: actions/checkout@v5
+
+      - name: Output the runner labels JSON array
+        id: runner_labels
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-runner-labels@main
+        with:
+          region: ${{ inputs.region }}
+
+  post_provisioning_roles_prep:
+    name: Post provisioning roles prep
+    runs-on: ${{ fromJson(needs.dependencies_prep.outputs.runner_labels) }}
+    needs: dependencies_prep
+    steps:
+      - name: Checkout this repo
+        id: checkout-workflows
+        uses: actions/checkout@v5
+
+      - name: Set deployment path
+        id: set-deployment-path
+        shell: bash
+        run: |
+          deployment_path="AnsibleInventories"
+          deployment_path+="/io/travelport/${{ inputs.tp_env }}/${{ inputs.region }}/${{ inputs.namespace }}"
+          echo "deployment_path=${deployment_path}" >> $GITHUB_OUTPUT
+
+#      - name: Install tree
+#        shell: bash
+#        run: |
+#          which_tree=$(which tree || true)
+#          if [ -z "${which_tree}" ] ; then
+#            sudo apt-get update
+#            sudo apt-get install -y tree
+#          fi
+#          tree --version
+
+      - name: Prepare IAAS ansible workspace
+        id: workspace-prep
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-ansible-workspace@main
+        with:
+          deployment_path: ${{ steps.set-deployment-path.outputs.deployment_path }}
+          node_types: "${{ inputs.node_types }}"
+          inventories_branch: ${{ inputs.inventories_branch }}
+          token: ${{ secrets.token }}
+          ssh_private_key: ${{ secrets.ssh_private_key }}
+          ansible_vault_key: ${{ secrets.ansible_vault_key }}
+
+      - name: Checkout ssh-public-keys repo
+        id: ssh-public-keys
+        uses: actions/checkout@v5
+        with:
+          path: ssh-public-keys
+          repository: Tvlport-IAAS/ssh-public-keys
+          token: ${{ secrets.token }}
+          ref: main
+
+      - name: Checkout pci_compliance
+        id: pci_compliance
+        uses: actions/checkout@v5
+        with:
+          path: pci_compliance
+          repository: Tvlport-Enterprise/pci_compliance
+          token: ${{ secrets.token }}
+          ref: 'main'
+
+      - name: Lookup the inventory type
+        id: inventory-type
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-inventory-var@main
+        with:
+          inventory_path: ${{ steps.workspace-prep.outputs.inventory_path }}
+          variable: tp_inventory_type
+
+      - name: Wait for host connection
+        if: ${{ fromJson(steps.inventory-type.outputs.json-output).msg != 'baseImageBuilderInventory' }}
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-ansible-run@main
+        with:
+          inventory_path: "${{ steps.workspace-prep.outputs.inventory_path }}"
+          node_types: "${{ inputs.node_types }}"
+          playbook: "Pipelines/playbooks/util/vm_power/wait_for_connection.yml"
+          limits: ${{ inputs.limits }}
+          ansible_debug: ${{ inputs.ansible_debug }}
+
+      - name: Wait a fixed amount of time for host to come up
+        if: ${{ fromJson(steps.inventory-type.outputs.json-output).msg == 'baseImageBuilderInventory' }}
+        shell: bash
+        run: sleep 30
+
+      - name: Run Init Python Configure playbook
+        if: ${{ fromJson(steps.inventory-type.outputs.json-output).msg == 'baseImageBuilderInventory' }}
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-ansible-run@main
+        with:
+          inventory_path: "${{ steps.workspace-prep.outputs.inventory_path }}"
+          node_types: "${{ inputs.node_types }}"
+          playbook: "Pipelines/playbooks/util/ansible_prerequisites/python_install.yml"
+          limits: ${{ inputs.limits }}
+          ansible_debug: ${{ inputs.ansible_debug }}
+
+      - name: Run OS configuration playbook
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-ansible-run@main
+        with:
+          inventory_path: "${{ steps.workspace-prep.outputs.inventory_path }}"
+          node_types: "${{ inputs.node_types }}"
+          playbook: "Pipelines/playbooks/os/os_configuration.yml"
+          limits: ${{ inputs.limits }}
+          ansible_debug: ${{ inputs.ansible_debug }}
+
+      # Commenting this for now.
+      # We need to make this conditional as thie effects all the different workflows,
+      # Possibly make we could look for a substring in the branch name, assuming that hardening must be the branch name
+      # - name: Run CIS configuration playbook
+      #   uses: Tvlport-IAAS/iaas-workflows/actions/iaas-ansible-run@main
+      #   with:
+      #     inventory_path: "${{ steps.workspace-prep.outputs.inventory_path }}"
+      #     node_types: "${{ inputs.node_types }}"
+      #     playbook: "Pipelines/playbooks/security/cis_providers/amazon/rhel_7/LinuxCis/tasks/main.yml"
+      #     limits: ${{ inputs.limits }}
+      #     ansible_debug: ${{ inputs.ansible_debug }}
+
+      - name: Lookup post provisioning roles
+        id: contains_var
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-inventory-var@main
+        with:
+          inventory_path: "${{ steps.workspace-prep.outputs.inventory_path }}"
+          variable: "post_provisioning_roles is defined"
+
+      - name: Run post provisioning roles playbook
+        if: fromJson(steps.contains_var.outputs.json-output).msg == true
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-ansible-run@main
+        with:
+          inventory_path: "${{ steps.workspace-prep.outputs.inventory_path }}"
+          node_types: "${{ inputs.node_types }}"
+          playbook: "Pipelines/playbooks/customer/post-provisioning/PostProvisioning.yml"
+          limits: ${{ inputs.limits }}
+          ansible_debug: ${{ inputs.ansible_debug }}
+
+      - name: Cleanup private keys
+        id: cleanup-keys
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-keys-cleanup@main

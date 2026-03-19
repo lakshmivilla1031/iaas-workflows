@@ -1,0 +1,147 @@
+---
+name: "Test composite actions"
+
+on:
+  push:
+    paths:
+      - '.github/workflows/*.yml'
+      - 'actions/**/*'
+      - 'tests/actions/**/*'
+
+  workflow_dispatch:
+
+jobs:
+  static_checks:
+    name: Static Checks
+    runs-on:
+      - self-hosted
+      - testing-runner
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check bash formatting
+        id: bash-formatting-check
+        shell: bash
+        run: docker run -v "$PWD":/mnt -w /mnt mvdan/shfmt -ci -i 2 -l -d -- ./actions/*/*.sh || true
+
+      - name: Check shell scripts
+        if: always()
+        id: bash-shell-check
+        shell: bash
+        run: docker run -v "$PWD":/mnt -w /mnt koalaman/shellcheck -- ./actions/*/*.sh actions/*/test/*.bats || true
+
+      - name: Glob match yaml
+        uses: tj-actions/glob@v22.0.1
+        id: glob-yaml
+        with:
+          files: |
+            ./actions/**/*.yml
+            ./.github/workflows/*.yml
+
+      - name: Run yaml linter
+        if: always()
+        id: yaml-linter
+        uses: ./actions/iaas-yaml-linter
+        with:
+          files: ${{ steps.glob-yaml.outputs.paths }}
+
+      - name: return failure status for yaml linter
+        if: failure()
+        shell: bash
+        run: exit 1
+
+      - name: return failure status for python linter
+        if: failure()
+        shell: bash
+        run: exit 1
+
+  tests:
+    name: Unit Tests
+    runs-on:
+      - self-hosted
+      - testing-runner
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install linters
+        shell: bash
+        run: |
+          export PATH=$PATH:/home/runner/.local/bin
+
+          yaml_linter=$(which yamllint || true)
+
+          if [ -z "${yaml_linter}" ] ; then
+            pip install yamllint
+          fi
+
+          yamllint --version
+
+          py_linter=$(which pylint || true)
+
+          if [ -z "${py_linter}" ] ; then
+            python3 -m pip install pylint
+          fi
+
+          pylint --version
+
+      - name: Setup BATS
+        uses: mig4/setup-bats@v1.2.0
+        with:
+          bats-version: 1.5.0
+
+      - name: Run Tests
+        run: |
+          export PATH=$PATH:/home/runner/.local/bin
+          chmod a+x actions/*/*.sh
+          chmod a+x actions/*/test/*.bats
+          bats --trace --print-output-on-failure actions/*/test/
+
+  self_check:
+    name: Integration Tests
+    runs-on:
+      - self-hosted
+      - testing-runner
+    needs: [static_checks, tests]
+    steps:
+      - name: Deploy Ansible vault key
+        shell: bash
+        run: |
+          if [ ! -f ~/.vp ]; then
+            echo "Creating Ansible vault key"
+            echo "${{ secrets.ANSIBLE_VAULT_KEY }}" > ~/.vp
+            chmod 0600 ~/.vp
+          fi
+
+      - uses: actions/checkout@v5
+
+      - name: Test invoke ansible run
+        uses: ./tests/actions/iaas-ansible-run
+
+      - name: Test list changed paths
+        uses: ./tests/actions/iaas-changed-paths
+
+      - name: Test format GIT ref
+        uses: ./tests/actions/iaas-format-ref
+
+      - name: Test lookup ansible inventory var
+        uses: ./tests/actions/iaas-inventory-var
+
+      - name: Test build ephemeral inventory
+        uses: ./tests/actions/iaas-ephemeral-inventory
+        with:
+          token: ${{ secrets.IAAS_WORKFLOWS_PAT }}
+
+      - name: Cleanup private keys
+        id: cleanup-keys-1
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-keys-cleanup@main
+
+      - name: Test build ansible workspace
+        uses: ./tests/actions/iaas-ansible-workspace
+        with:
+          token: ${{ secrets.IAAS_WORKFLOWS_PAT }}
+          ssh_private_key: ${{ secrets.IAAS_SSH_PRIVATE_KEY }}
+          ansible_vault_key: ${{ secrets.ANSIBLE_VAULT_KEY }}
+
+      - name: Cleanup private keys
+        id: cleanup-keys-2
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-keys-cleanup@main

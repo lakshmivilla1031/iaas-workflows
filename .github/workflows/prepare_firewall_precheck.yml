@@ -1,0 +1,204 @@
+---
+name: "Prepare Firewall Precheck workflow"
+
+on:
+  workflow_call:
+    inputs:
+      deployment_path:
+        description: The deployment path
+        type: string
+        required: true
+      inventories_branch:
+        description: The inventories branch
+        default: main
+        type: string
+    secrets:
+      token:
+        description: "The github token"
+        required: true
+      ansible_vault_key:
+        description: "The ansible vault key"
+        required: true
+
+jobs:
+  dependencies_prep:
+    name: Prepare dependencies
+    runs-on:
+      - self-hosted
+      - testing-runner
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      runner_env: ${{ steps.runner_env.outputs.major_env }}
+    steps:
+
+      - name: Set variables
+        id: set-vars
+        shell: bash
+        run: |
+          tp_env=$(echo "${{ inputs.deployment_path }}" | cut -d '/' -f3)
+          echo "tp_env=${tp_env}" >> $GITHUB_OUTPUT
+
+      - name: Output the runner environment
+        id: runner_env
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-major-env@main
+        with:
+          tp_env: ${{ steps.set-vars.outputs.tp_env }}
+
+  run_prepare_firewall_precheck:
+    name: Run prepare firewall precheck
+    needs:
+      - dependencies_prep
+    runs-on:
+      - self-hosted
+      - "${{ needs.dependencies_prep.outputs.runner_env }}"
+      - onprem
+      - toolkit
+      - podman
+    steps:
+      - name: Checkout this repo
+        id: checkout-workflows
+        uses: actions/checkout@v5
+
+      - name: Prepare IAAS ansible workspace
+        id: workspace-prep
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-ansible-workspace@main
+        with:
+          deployment_path: "AnsibleInventories/${{ inputs.deployment_path }}"
+          inventories_branch: ${{ inputs.inventories_branch }}
+          token: ${{ secrets.token }}
+          ansible_vault_key: ${{ secrets.ansible_vault_key }}
+
+      - name: Priority check
+        id: priority-check
+        env:
+          GITHUB_TOKEN: ${{ secrets.token }}
+        run: |
+          namespace=$(echo "${{ inputs.deployment_path }}" | cut -d '/' -f5) #get the namespace
+          priority_counter=0
+          for file in $(ls AnsibleInventories/ephemeral_inventory-${namespace}/*.yml) ; do
+            ansible-playbook -v --vault-password=~/.vp -i \
+            $file Pipelines/modules/azure_firewall_priority/set_azure_firewall_priority.yml > output.log
+                changed=$(grep -oP '(?<=changed=)[0-9]+' output.log)
+                echo "___________________"
+                echo "Output log follows:"
+                cat output.log
+                echo "___________________"
+                for items_changed in $changed ; do
+                  int_changed=$((items_changed))
+                  if [[ $int_changed -gt 0 ]]; then
+                    priority_counter=$(( priority_counter + 1 ))
+                  fi
+                done
+          done
+          echo "priority counter: $priority_counter"
+          echo "priority_counter=${priority_counter}" >> $GITHUB_OUTPUT
+          TIMESTAMP=$(date +"%Y%m%d%H%M%S")
+          echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_OUTPUT
+          pushd AnsibleInventories/environments
+          git status
+          if [[ $priority_counter -gt 0 ]] ; then
+            git config credential.username "${{ github.actor }}"
+            git config --local user.email "${{ github.actor }}@users.noreply.github.com"
+            git config --local user.name "${{ github.actor }}"
+            git config push.default simple
+            git config pull.rebase true   # rebase
+            git checkout -b "priority_changes_${TIMESTAMP}" || exit 21
+            git add azure-firewall-priorities.json
+            git commit -m "precheck pushed Priority changes on run #${{ github.run_number }}"
+            git push --verbose origin "priority_changes_${TIMESTAMP}" || exit 24
+          else
+            echo "No priority changes detected, no branch created."
+          fi
+          popd
+          rm -rf AnsibleInventories/ephemeral_inventory-*
+
+# this next step was not working, it was saying that remote branch does not exist, and then pushed to main anyway?!?!
+#      - name: Push priority changes to inventories repo
+#        if: ${{ steps.priority-check.outputs.priority_counter > 0 }}
+#        id: push-iaas-inventories
+#        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-git-push@main
+#        with:
+#          commit_message: "Pushing Priority changes on run #${{ github.run_number }}"
+#          path: "./AnsibleInventories/environments"
+#          file_patterns: "*-firewall-priorities.json"
+#          destination_branch: "priority_changes_${{ steps.priority-check.outputs.TIMESTAMP }}"
+#          access_token: ${{ secrets.token }}
+
+      - name: Make a PR from our branch
+        if: ${{ steps.priority-check.outputs.priority_counter > 0 }}
+        id: pr-iaas-inventories
+        env:
+          GITHUB_TOKEN: ${{ secrets.token }}
+        run: |
+          HTTP_CODE=$(curl -sS \
+          -o response.json \
+          -w "%{http_code}" \
+          -X POST \
+          -H "Accept: application/vnd.github+json" \
+          -H "Authorization: Bearer $GITHUB_TOKEN" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          https://api.github.com/repos/Tvlport-IAAS/iaas-inventories/pulls \
+          -d '{
+            "title":"firewall precheck - priority_changes_${{ steps.priority-check.outputs.TIMESTAMP }}",
+            "body":"Priority changed",
+            "head":"priority_changes_${{ steps.priority-check.outputs.TIMESTAMP }}",
+            "base":"main"
+          }')
+          if [ $HTTP_CODE -ne 201 ]; then
+            echo "github api error HTTP: $HTTP_CODE"
+            exit 35
+          fi
+          PR_NUMBER=$(jq -r '.number' response.json)
+          if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "Failed to create PR"
+            exit 25
+          fi
+          echo "PR created successfully $PR_NUMBER"
+          echo "PR_NUMBER=$PR_NUMBER" >> $GITHUB_OUTPUT
+
+      - name: Wait for the pr to merge
+        if: ${{ steps.priority-check.outputs.priority_counter > 0 }}
+        id: pr-waiting
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.token }}
+        run: |
+          PR_NUMBER="${{ steps.pr-iaas-inventories.outputs.PR_NUMBER }}"
+          echo "PR $PR_NUMBER was created, please approve or reject it to continue the workflow"
+          echo "https://github.com/Tvlport-IAAS/iaas-inventories/pull/$PR_NUMBER"
+          max_attempts=120
+          sleep_time=30
+          for (( i=1; i<max_attempts; i++)); do
+            HTTP_CODE=$(curl -sS \
+              -o review.json \
+              -w "%{http_code}"\
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              https://api.github.com/repos/Tvlport-IAAS/iaas-inventories/pulls/$PR_NUMBER
+            )
+            if [ "$HTTP_CODE" -ne 200 ]; then
+              echo "Github API error HTTP: $HTTP_CODE"
+              exit 29
+            fi
+            STATE=$(jq -r '.state' review.json)
+            MERGED=$(jq -r '.merged' review.json)
+            if [ "$MERGED" = "true" ]; then
+              echo "pr was merged, rest of the workflow will continue"
+              exit 0
+            fi
+            if [ "$STATE" = "rejected" ]; then
+              echo "pr was rejected"
+              exit 26
+            fi
+            if [ "$STATE" = "closed" ]; then
+              echo "pr was closed without merging"
+              exit 27
+            fi
+            echo "waiting for priority PR $PR_NUMBER to be approved"
+            sleep $sleep_time
+          done
+          echo "Timeout waiting for PR Merge"
+          exit 28

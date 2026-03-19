@@ -1,0 +1,35 @@
+---
+name: "Schema Validator"
+
+on:
+  workflow_call:
+    inputs:
+      schema_file:
+        description: "Schema file"
+        type: string
+        required: true
+
+      target_file:
+        description: "Target file"
+        type: string
+        required: true
+
+jobs:
+  run_schema_validator:
+    runs-on:
+      - self-hosted
+      - testing-runner
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Json Schema
+        shell: bash
+        run: |
+          python3 -m pip install check-jsonschema
+
+      - name: Run schema validation
+        shell: bash
+        run: |
+          export PATH=$PATH:/home/runner/.local/bin
+          check-jsonschema --schemafile ${{ inputs.target_file }} ${{ inputs.schema_file }}

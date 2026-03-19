@@ -1,0 +1,117 @@
+---
+name: "001 Workflow Generator"
+
+on:
+  workflow_call:
+    inputs:
+      namespace:
+        description: "The namespace"
+        type: string
+        required: true
+      tp_env:
+        description: "The environment"
+        type: string
+        required: true
+      inventory_branch:
+        description: "The iaas-inventories branch"
+        type: string
+        required: false
+        default: main
+      workflows_branch:
+        description: "The iaas-workflows branch"
+        type: string
+        required: false
+        default: main
+
+    secrets:
+      token:
+        description: "The token to use"
+        required: true
+      ansible_vault_key:
+        description: "The Ansible vault encryption key to use"
+        required: true
+
+jobs:
+  generate_workflows:
+    name: Lookup inventory types list
+    runs-on:
+      - self-hosted
+      - ansible-runner
+    env:
+      APP_WORKFLOWS_REPO_PATH: "AppWorkflows"
+      COMMON_WORKFLOWS_REPO_PATH: "iaas-workflows"
+      INVENTORIES_REPO_PATH: "AnsibleInventories"
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v5
+
+      - name: Checkout this repo to ${{ env.APP_WORKFLOWS_REPO_PATH }}
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tp_env }}
+          path: ${{ env.APP_WORKFLOWS_REPO_PATH }}
+          token: ${{ secrets.token }}
+
+      - name: Checkout iaas-inventories as ${{ env.INVENTORIES_REPO_PATH }}
+        id: checkout-inventories
+        uses: actions/checkout@v5
+        with:
+          repository: Tvlport-IAAS/iaas-inventories
+          token: ${{ secrets.token }}
+          path: ${{ env.INVENTORIES_REPO_PATH }}
+          ref: ${{ inputs.inventory_branch }}
+
+      - name: Checkout iaas-workflows
+        id: checkout-workflows
+        uses: actions/checkout@v5
+        with:
+          repository: Tvlport-IAAS/iaas-workflows
+          token: ${{ secrets.token }}
+          path: ${{ env.COMMON_WORKFLOWS_REPO_PATH }}
+          ref: ${{ inputs.workflows_branch }}
+
+      - name: Output ansible variables to file
+        id: extra_vars
+        shell: bash
+        run: |
+          vars_file=$(mktemp)
+          echo "---" > "${vars_file}"
+          echo "tp_env: '${{ inputs.tp_env }}'" >> "${vars_file}"
+          echo "tp_namespace: '${{ inputs.namespace }}'" >> "${vars_file}"
+          echo "vars_file=${vars_file}" >> $GITHUB_OUTPUT
+
+      - name: Deploy Ansible vault key
+        shell: bash
+        run: |
+          if [ ! -f ~/.vp ]; then
+            echo "Creating Ansible vault key"
+            echo "${{ secrets.ansible_vault_key }}" > ~/.vp
+            chmod 0600 ~/.vp
+          fi
+
+      - name: Run generate workloads
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-ansible-run@main
+        with:
+          inventory_path: "iaas-workflows/playbooks/local-inventory.yml"
+          playbook: "iaas-workflows/playbooks/github/workflows/generate_workflows.yml"
+          extra-vars: "--extra-vars \"@${{ steps.extra_vars.outputs.vars_file }}\""
+
+      - name: Cleanup variables file
+        if: always()
+        shell: bash
+        run: rm -f ${{ steps.extra_vars.outputs.vars_file }}
+
+      - name: Push changes to ${{ env.APP_WORKFLOWS_REPO_PATH }}
+        id: push_changes
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-git-push/@main
+        with:
+          commit_message: "Automated push of inventory artifacts"
+          path: ${{ env.APP_WORKFLOWS_REPO_PATH }}/.github/workflows
+          file_patterns: "*_wf.yml"
+          destination_branch: ${{ inputs.tp_env }}
+          access_token: ${{ secrets.token }}
+          force: true
+
+      - name: Cleanup private keys
+        id: cleanup-keys
+        uses: Tvlport-IAAS/iaas-workflows/actions/iaas-keys-cleanup@main
