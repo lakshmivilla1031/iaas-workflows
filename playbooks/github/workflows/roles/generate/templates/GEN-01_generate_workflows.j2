@@ -1,0 +1,84 @@
+---
+name: "{{ tp_consolidated_workflow.name }}"
+
+on:
+{% if tp_env == 'main' %}
+  schedule:
+    - cron: '0 7 * * *'
+
+{% endif %}
+  workflow_dispatch:
+    inputs:
+      inventory_branch:
+        description: "Override the inventories branch"
+        type: string
+        default: "main"
+        required: true
+      workflows_branch:
+        description: "The iaas-workflows branch"
+        type: string
+        required: false
+        default: main
+
+jobs:
+{% if tp_env == 'main' %}
+  call_generate_workflows:
+    name: "Call workflow generator"
+    uses: "Tvlport-IAAS/iaas-workflows/.github/workflows/001_generate_workflows_wf.yml@main"
+    strategy:
+      matrix:
+        environment:
+{% for _env in tp_envs %}
+          - "{{ _env }}"
+{% endfor %}
+    with:
+      namespace: "{{ tp_namespace }}"
+      tp_env: "{% raw %}${{ matrix.environment }}{% endraw %}"
+      inventory_branch: "{% raw %}${{ inputs.inventory_branch }}{% endraw %}"
+      workflows_branch: "{% raw %}${{ inputs.workflows_branch }}{% endraw %}"
+
+    secrets:
+      token: "{% raw %}${{ secrets.IAAS_WORKFLOWS_PAT }}{% endraw %}"
+      ansible_vault_key: "{% raw %}${{ secrets.ANSIBLE_VAULT_KEY }}{% endraw %}"
+
+  call_generate_workflows_main:
+    name: "Call workflow generator {{ tp_env }}"
+    needs: call_generate_workflows
+    uses: "Tvlport-IAAS/iaas-workflows/.github/workflows/001_generate_workflows_wf.yml@main"
+    with:
+      namespace: "{{ tp_namespace }}"
+      tp_env: "{{ tp_env }}"
+      inventory_branch: "{% raw %}${{ inputs.inventory_branch }}{% endraw %}"
+      workflows_branch: "{% raw %}${{ inputs.workflows_branch }}{% endraw %}"
+
+    secrets:
+      token: "{% raw %}${{ secrets.IAAS_WORKFLOWS_PAT }}{% endraw %}"
+      ansible_vault_key: "{% raw %}${{ secrets.ANSIBLE_VAULT_KEY }}{% endraw %}"
+
+  repository_dispatch:
+    name: "Create repository dispatch event"
+    needs: call_generate_workflows_main
+    runs-on:
+      - self-hosted
+      - base-runner
+    steps:
+      - name: Run repository dispatch
+        uses: peter-evans/repository-dispatch@v3.0.0
+        with:
+          token: "{% raw %}${{ secrets.IAAS_WORKFLOWS_PAT }}{% endraw %}"
+          event-type: generate_workflow
+
+{% else %}
+  call_generate_workflows_{{ tp_env }}:
+    name: "Call workflow generator {{ tp_env }}"
+    uses: "Tvlport-IAAS/iaas-workflows/.github/workflows/001_generate_workflows_wf.yml@main"
+    with:
+      namespace: "{{ tp_namespace }}"
+      tp_env: "{{ tp_env }}"
+      inventory_branch: "{% raw %}${{ inputs.inventory_branch }}{% endraw %}"
+      workflows_branch: "{% raw %}${{ inputs.workflows_branch }}{% endraw %}"
+
+    secrets:
+      token: "{% raw %}${{ secrets.IAAS_WORKFLOWS_PAT }}{% endraw %}"
+      ansible_vault_key: "{% raw %}${{ secrets.ANSIBLE_VAULT_KEY }}{% endraw %}"
+{% endif %}

@@ -1,0 +1,13 @@
+---
+- name: "Find matching workflow files"
+  find:
+    paths: "{{ workspace + '/AppWorkflows/.github/workflows/' }}"
+    patterns: "*_wf.yml"
+    excludes: "GEN-01_generate_workflows_wf.yml"
+  register: find_result
+
+- name: "Remove workflow file (delete file)"
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  with_items: "{{ find_result.files }}"

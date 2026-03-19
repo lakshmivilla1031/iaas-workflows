@@ -1,0 +1,7 @@
+---
+workflow_inventory_file: "{{ workspace }}/AnsibleInventories/namespaces/{{ tp_namespace }}/namespace_workflows.yml"
+grep_search_pattern: "tp_inventory_type:"
+grep_file_pattern: "{{ workspace }}/AnsibleInventories/io/travelport/{{ tp_env }}/*/{{ tp_namespace }}*/*.yml"
+env_pattern: '^.*\/travelport\/([a-zA-z]*)\/.*$'
+region_pattern: '^.*\/travelport\/[a-zA-z\d]*\/([a-zA-z\d]*).*$'
+namespaces_pattern: '^.*\/travelport\/[a-zA-z\d]*\/[a-zA-z\d]*\/(.*)\/.*$'

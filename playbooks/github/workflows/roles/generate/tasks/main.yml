@@ -1,0 +1,114 @@
+---
+- name: Call add to consolidated workflows
+  when: tp_env != 'main'
+  include_tasks: "remove_files.yml"
+
+- name: Include vars from namespace_workflows.yml
+  include_vars: "{{ workflow_inventory_file }}"
+
+- name: Find matching deployment files
+  find:
+    paths: "{{ workspace }}/AnsibleInventories/io/travelport"
+    file_type: directory
+    depth: 3
+    patterns: "{{ tp_namespace }}*"
+    excludes: "*.disabled-*"
+    recurse: true
+  register: find_result
+
+- name: Set deployment directory list
+  when:
+    - find_result is defined
+    - find_result.matched > 0
+  set_fact:
+    deployment_paths: "{{ deployment_paths | default([]) + [ item.path ] }}"
+  with_items: "{{ find_result.files }}"
+
+- name: Set unique list of environments
+  when:
+    - deployment_paths is defined
+    - workflow_generator_includes is not defined
+  set_fact:
+    tp_envs: "{{ (tp_envs | default([]) + [ item | regex_replace(env_pattern, '\\1') ]) | unique }}"
+  with_items: "{{ deployment_paths }}"
+
+- name: Set unique list of environments
+  when:
+    - deployment_paths is defined
+    - workflow_generator_includes is defined
+    - workflow_generator_includes.environments is defined
+  set_fact:
+    tp_envs: "{{ workflow_generator_includes.environments }}"
+
+- name: Set unique list of environments
+  when: deployment_paths is defined
+  set_fact:
+    tp_branches: "{{ tp_envs + [ 'main' ] }}"
+
+- name: Set unique list of regions filtered on environment
+  when:
+    - deployment_paths is defined
+    - workflow_generator_includes is not defined
+    - tp_env != 'main'
+    - tp_env in item
+  set_fact:
+    tp_regions: "{{ (tp_regions | default([]) + [ item | regex_replace(region_pattern, '\\1') ]) | unique }}"
+  with_items: "{{ deployment_paths }}"
+
+- name: Set unique list of regions with no filter
+  when:
+    - deployment_paths is defined
+    - workflow_generator_includes is not defined
+    - tp_env == 'main'
+  set_fact:
+    tp_regions: "{{ (tp_regions | default([]) + [ item | regex_replace(region_pattern, '\\1') ]) | unique }}"
+  with_items: "{{ deployment_paths }}"
+
+- name: Set unique list of regions from workflow_generator_includes
+  when:
+    - deployment_paths is defined
+    - workflow_generator_includes is defined
+    - workflow_generator_includes.regions is defined
+  set_fact:
+    tp_regions: "{{ workflow_generator_includes.regions }}"
+
+- name: "Set consolidated workflows object"
+  set_fact:
+    tp_consolidated_workflows: []
+
+- name: "Set generate workflows workflow object"
+  set_fact:
+    administrative_workflows:
+      - id: "GEN-01_generate_workflows"
+        name: "GEN-01: Workflow Generator"
+        inventory_types:
+          - "any"
+        tp_env: "{{ tp_env }}"
+        tp_regions: "{{ tp_regions | default([]) }}"
+        tp_namespaces: ["{{ tp_namespace }}"]
+      - id: "ADM-00_delete_workflow_runs"
+        name: "ADM-00: Delete Workflow Runs"
+        inventory_types:
+          - "any"
+        tp_env: "{{ tp_env }}"
+        tp_regions: "{{ tp_regions | default([]) }}"
+        tp_namespaces: ["{{ tp_namespace }}"]
+
+- name: "Add generate workflows workflow to tp_consolidated_workflows"
+  set_fact:
+    tp_consolidated_workflows: "{{ tp_consolidated_workflows + administrative_workflows }}"
+
+- name: Call add to consolidated workflows
+  loop: "{{ tp_workflows }}"
+  loop_control:
+    loop_var: tp_workflow
+  include_tasks: "add_to_consolidated_workflows.yml"
+
+- debug: var=tp_consolidated_workflows
+- name: Call generate workflow
+  template:
+    src: "{{ tp_consolidated_workflow.id }}.j2"
+    dest: "{{ workspace + '/AppWorkflows/.github/workflows/' + tp_consolidated_workflow.id + '_wf.yml' }}"
+  loop: "{{ tp_consolidated_workflows }}"
+  loop_control:
+    loop_var: tp_consolidated_workflow

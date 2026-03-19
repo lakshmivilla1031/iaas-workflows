@@ -1,0 +1,90 @@
+---
+name: "{{ tp_consolidated_workflow.name }}"
+
+{% if tp_env == "main" %}
+on:
+  repository_dispatch:
+    types: [generate_workflow]
+
+  workflow_dispatch:
+
+jobs:
+  display_default_usage:
+    name: Display default usage
+    runs-on:
+      - self-hosted
+      - base-runner
+    steps:
+      - name: Display usage
+        shell: bash
+        run: |
+          echo "================================================================================"
+          echo " Usage: Select from the branches drop-down the environment you want to deploy!! "
+          echo "================================================================================"
+{% else %}
+on:
+  workflow_dispatch:
+    inputs:
+      namespace:
+        description: "The deployment namespace (alias)"
+        required: true
+        type: choice
+        options:
+{% for _namespace in tp_consolidated_workflow.tp_namespaces %}
+          - "{{ _namespace }}"
+{% endfor %}
+      region:
+        description: "The deployment region"
+        required: true
+        type: choice
+        options:
+{% for _region in tp_consolidated_workflow.tp_regions %}
+          - "{{ _region }}"
+{% endfor %}
+      tp_env:
+        description: "The deployment environment"
+        required: true
+        type: choice
+        options:
+          - "{{ tp_consolidated_workflow.tp_env }}"
+      node_types:
+        description: "The deployment node types"
+        required: true
+        type: choice
+        options:
+{% for _node_type in tp_consolidated_workflow.tp_node_types %}
+          - "{{ _node_type }}"
+{% endfor %}
+      inventories_branch:
+        description: "Override the inventory repository branch"
+        required: true
+        type: string
+        default: "main"
+      state_branch:
+        description: "Override the iaas-state-branch repository branch"
+        required: true
+        type: string
+        default: "staging"
+      ansible_debug:
+        description: "Choose Ansible Debug Level"
+        required: true
+        default: '-v'
+        type: string
+
+jobs:
+  call_provision_serverless:
+    name: "Build serverless module"
+    uses: "Tvlport-IAAS/iaas-workflows/.github/workflows/serverless_deployment_module_wf.yml@main"
+    with:
+      namespace: "{% raw %}${{ inputs.namespace }}{% endraw %}"
+      region: "{% raw %}${{ inputs.region }}{% endraw %}"
+      tp_env: "{% raw %}${{ inputs.tp_env }}{% endraw %}"
+      node_types: "{% raw %}${{ inputs.node_types }}{% endraw %}"
+      inventories_branch: "{% raw %}${{ inputs.inventories_branch }}{% endraw %}"
+      state_branch: "{% raw %}${{ inputs.state_branch }}{% endraw %}"
+      ansible_debug: "{% raw %}${{ inputs.ansible_debug }}{% endraw %}"
+
+    secrets:
+      token: "{% raw %}${{ secrets.IAAS_WORKFLOWS_PAT }}{% endraw %}"
+      ansible_vault_key: "{% raw %}${{ secrets.ANSIBLE_VAULT_KEY }}{% endraw %}"
+{% endif %}

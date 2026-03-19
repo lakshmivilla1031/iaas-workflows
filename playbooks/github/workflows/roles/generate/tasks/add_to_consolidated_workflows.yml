@@ -1,0 +1,50 @@
+---
+- name: "Set deployment files"
+  set_fact:
+    deployment_files: []
+    tp_namespaces: []
+    tp_node_types: []
+
+- name: Format grep search pattern
+  set_fact:
+    grep_search_pattern: "{{ tp_workflow.inventory_types | join('|') }}"
+
+- name: Format grep file pattern
+  when: tp_env == 'main'
+  set_fact:
+    grep_file_pattern: "{{ workspace }}/AnsibleInventories/io/travelport/*/*/{{ tp_namespace }}*/*.yml"
+
+- name: Grep list of matching directories
+  shell: "grep -El \"{{ grep_search_pattern }}\" {{ grep_file_pattern }} | grep -v 'disabled' | cut -d ':' -f1"
+  register: grep_output
+
+- name: Set deployment files
+  when: grep_output is defined
+  set_fact:
+    deployment_files: "{{ deployment_files + [ item ] }}"
+  with_items: "{{ grep_output.stdout_lines }}"
+
+- name: Set unique list of namespaces and node types
+  when:
+    - deployment_files is defined
+  set_fact:
+    tp_namespaces: "{{ (tp_namespaces | default([]) + [ item | regex_replace(namespaces_pattern, '\\1') ]) | unique }}"
+    tp_node_types: "{{ (tp_node_types | default([]) + [ (item | basename).split('.')[0] ]) | unique }}"
+  with_items: "{{ deployment_files }}"
+
+- name: "Create consolidated workflow"
+  when: tp_node_types | length > 0
+  set_fact:
+    consolidated_workflow:
+      id: "{{ tp_workflow.id }}"
+      name: "{{ tp_workflow.name }}"
+      inventory_types: "{{ tp_workflow.inventory_types }}"
+      tp_env: "{{ tp_env }}"
+      tp_regions: "{{ tp_regions }}"
+      tp_namespaces: "{{ tp_namespaces }}"
+      tp_node_types: "{{ tp_node_types }}"
+
+- name: "Add consolidated workflow to tp_consolidated_workflows"
+  when: consolidated_workflow is defined
+  set_fact:
+    tp_consolidated_workflows: "{{ tp_consolidated_workflows + [ consolidated_workflow ] }}"
