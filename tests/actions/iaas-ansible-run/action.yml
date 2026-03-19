@@ -1,0 +1,43 @@
+---
+name: 'IAAS Ansible Run Action'
+description: 'Composite action used to run Ansible within IAAS requirements'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Test 1 Ansible run with extra-vars
+      id: test-ansible-run_1
+      uses: ./actions/iaas-ansible-run
+      with:
+        inventory_path: ./tests/actions/iaas-ansible-run/inventory.yml
+        playbook: ./tests/actions/iaas-ansible-run/playbook.yml
+        limits: "--limit \"web*\""
+        extra-vars: "--extra-vars \"my_extra_var='foobar'\""
+        ansible_debug: -vv
+
+    - name: Output ansible variables to file
+      id: extra_vars
+      shell: bash
+      run: |
+        mydate=$(date +"%Y%m%d%H%M%S")
+        vars_file="/tmp/ansible_extra_vars_${mydate}.yml"
+        echo "---" > "${vars_file}"
+        echo "my_extra_var: 'foobar'" >> "${vars_file}"
+        echo "my_other_var: 'bizbaz'" >> "${vars_file}"
+        echo "vars_file=${vars_file}" >> $GITHUB_OUTPUT
+        cat "$vars_file"
+
+    - name: Test 2 Ansible run with extra-vars file
+      id: test-ansible-run_2
+      uses: ./actions/iaas-ansible-run
+      with:
+        inventory_path: ./tests/actions/iaas-ansible-run/inventory.yml
+        playbook: ./tests/actions/iaas-ansible-run/playbook.yml
+        limits: "--limit \"web*\""
+        extra-vars: "--extra-vars \"@${{ steps.extra_vars.outputs.vars_file }}\""
+        ansible_debug: -vv
+
+    - name: Cleanup variables file
+      if: always()
+      shell: bash
+      run: rm -f ${{ steps.extra_vars.outputs.vars_file }}

@@ -1,0 +1,19 @@
+---
+all:
+  hosts:
+    webserver1:
+
+  vars:
+    my_string: "foobar"
+
+    my_list:
+      - foo
+      - bar
+
+    my_dict:
+      foo:
+        child:
+          name: "foz"
+      bar:
+        child:
+          name: "baz"

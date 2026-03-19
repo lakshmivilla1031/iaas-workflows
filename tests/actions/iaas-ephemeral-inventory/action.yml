@@ -1,0 +1,106 @@
+---
+name: 'Test Build Ephemeral Inventory Action'
+description: 'Composite action used to build and ephemeral inventory'
+inputs:
+  token:
+    description: Token used to push the code
+    required: true
+    default: ${{ github.token }}
+
+outputs:
+  inventory_path:
+    description: 'The ephemeral inventory directory or file'
+    value: ${{ steps.build-ephemeral-inventory.outputs.value }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout iaas-inventories as AnsibleInventories
+      uses: actions/checkout@v5
+      with:
+        repository: Tvlport-IAAS/iaas-inventories
+        token: ${{ inputs.token }}
+        path: AnsibleInventories
+        ref: main
+
+    - name: Test ephemeral inventory with directory
+      id: test-ephemeral-inventory-dir
+      uses: ./actions/iaas-ephemeral-inventory
+      with:
+       deployment_path: "AnsibleInventories/io/travelport/dev/hc1/feature-branch-testing"
+
+    - name: Validate ephemeral inventory with directory
+      id: validate-ephemeral-inventory-dir
+      shell: bash
+      run: |
+        echo "::add-matcher::${GITHUB_ACTION_PATH}/matcher.json"
+        chmod a+x ${GITHUB_ACTION_PATH}/script.sh
+        ${GITHUB_ACTION_PATH}/script.sh ${{ steps.test-ephemeral-inventory-dir.outputs.inventory_path }}
+        echo "::remove-matcher owner=bash-action::"
+
+    - name: Remove ephemeral inventory
+      shell: bash
+      run: |
+        rm -rf AnsibleInventories/ephemeral*
+
+    - name: Test ephemeral inventory with single node type
+      id: test-ephemeral-inventory-single-node
+      uses: ./actions/iaas-ephemeral-inventory
+      with:
+        deployment_path: "AnsibleInventories/io/travelport/dev/hc1/feature-branch-testing"
+        node_types: "rhel7"
+
+    - name: Validate ephemeral inventory with single node type
+      id: validate-ephemeral-inventory-single-node
+      shell: bash
+      run: |
+        echo "::add-matcher::${GITHUB_ACTION_PATH}/matcher.json"
+        chmod a+x ${GITHUB_ACTION_PATH}/script.sh
+        ${GITHUB_ACTION_PATH}/script.sh ${{ steps.test-ephemeral-inventory-single-node.outputs.inventory_path }}
+        echo "::remove-matcher owner=bash-action::"
+
+    - name: Remove ephemeral inventory
+      shell: bash
+      run: |
+        rm -rf AnsibleInventories/ephemeral*
+
+    - name: Test ephemeral inventory with multiple node types
+      id: test-ephemeral-inventory-multiple-nodes
+      uses: ./actions/iaas-ephemeral-inventory
+      with:
+        deployment_path: "AnsibleInventories/io/travelport/dev/hc1/feature-branch-testing"
+        node_types: "rhel7 rhel8"
+
+    - name: Validate ephemeral inventory with multiple node types
+      id: validate-ephemeral-inventory-multiple-nodes
+      shell: bash
+      run: |
+        echo "::add-matcher::${GITHUB_ACTION_PATH}/matcher.json"
+        chmod a+x ${GITHUB_ACTION_PATH}/script.sh
+        ${GITHUB_ACTION_PATH}/script.sh ${{ steps.test-ephemeral-inventory-multiple-nodes.outputs.inventory_path }}
+        echo "::remove-matcher owner=bash-action::"
+
+    - name: Remove ephemeral inventory
+      shell: bash
+      run: |
+        rm -rf AnsibleInventories/ephemeral*
+
+    - name: Test ephemeral inventory with file
+      id: test-ephemeral-inventory-file
+      uses: ./actions/iaas-ephemeral-inventory
+      with:
+        deployment_path: "AnsibleInventories/io/travelport/dev/hc1/feature-branch-testing/rhel7.yml"
+
+    - name: Validate ephemeral inventory with file
+      id: validate-ephemeral-inventory-file
+      shell: bash
+      run: |
+        echo "::add-matcher::${GITHUB_ACTION_PATH}/matcher.json"
+        chmod a+x ${GITHUB_ACTION_PATH}/script.sh
+        ${GITHUB_ACTION_PATH}/script.sh ${{ steps.test-ephemeral-inventory-file.outputs.inventory_path }}
+        echo "::remove-matcher owner=bash-action::"
+
+    - name: Remove ephemeral inventory
+      shell: bash
+      run: |
+        rm -rf AnsibleInventories/ephemeral*

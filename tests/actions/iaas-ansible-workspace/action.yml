@@ -1,0 +1,41 @@
+---
+name: 'IAAS Ansible Workspace Action'
+description: 'Composite action used to prepare the IAAS Ansible workspace'
+inputs:
+  token:
+    description: "The GitHub personal access token"
+    required: true
+  ssh_private_key:
+    description: "The SSH private key used to access the AnsibleInventories repository"
+    required: false
+  ansible_vault_key:
+    description: "The Ansible Vault key used to decrypt sensitive data"
+    required: true
+runs:
+  using: "composite"
+  steps:
+
+    - name: Test Ansible workspace
+      id: test-ansible-workspace
+      uses: ./actions/iaas-ansible-workspace
+      with:
+        deployment_path: "AnsibleInventories/io/travelport/dev/hc1/feature-branch-testing/rhel7.yml"
+        inventories_branch: main
+        token: ${{ inputs.token }}
+        ansible_vault_key: ${{ inputs.ansible_vault_key }}
+
+    - name: Validate ephemeral inventory
+      id: validate-ephemeral-inventory
+      shell: bash
+      run: |
+        echo "::add-matcher::${GITHUB_ACTION_PATH}/matcher.json"
+        chmod a+x ${GITHUB_ACTION_PATH}/script.sh
+        limit="rhel70001.feature-branch-testing.hc1.dev.travelport.io"
+        ${GITHUB_ACTION_PATH}/script.sh "${{ steps.test-ansible-workspace.outputs.inventory_path }}" "${limit}"
+        echo "::remove-matcher owner=bash-action::"
+
+    - name: Remove AnsibleInventories
+      shell: bash
+      run: |
+        rm -rf AnsibleInventories
+        rm -rf Pipelines

@@ -1,0 +1,27 @@
+---
+all:
+  hosts:
+    webserver1:
+    webserver2:
+    dbserver1:
+    dbserver2:
+    controller1:
+    controller2:
+
+  children:
+    webservers:
+      hosts:
+        webserver1:
+        webserver2:
+    dbservers:
+      hosts:
+        dbserver1:
+        dbserver2:
+    controllers:
+      hosts:
+        controller1:
+        controller2:
+
+  vars:
+    myvar1: foo
+    myvar2: bar

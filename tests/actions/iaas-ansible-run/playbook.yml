@@ -1,0 +1,20 @@
+---
+- name: "Test playbook"
+  hosts: all
+  run_once: true
+  connection: local
+
+  tasks:
+    - name: "Display list of hosts after limiting"
+      debug:
+        msg: |
+          Here is the list of hosts, after limits have been applied:
+          {{ ansible_play_hosts | sort | to_nice_yaml }}
+
+    - fail:
+      when: my_extra_var is not defined
+
+    - debug: var=my_extra_var
+
+    - debug: var=my_other_var
+      when: my_other_var is defined

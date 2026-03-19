@@ -1,0 +1,42 @@
+---
+name: 'IaaS Changed Paths'
+description: 'Composite action used to output a list of all changed directories'
+inputs:
+  files:
+    description: "Check for changes using only these list of file(s) (Defaults to the entire repo)"
+    required: false
+    default: ""
+  return_depth:
+    description: "Changed paths return depth"
+    required: false
+    default: "0"  # 0 disables return depth
+  json:
+    description: "Returns json output suitable for matrix strategy"
+    required: false
+    default: 'true'
+runs:
+  using: "composite"
+  steps:
+    - name: Test changed paths
+      id: test-changed-paths
+      uses: ./actions/iaas-changed-paths
+      with:
+        files: "**/*"
+        return_depth: 0
+        json: true
+
+    - name: Fail if no changed paths
+      if: ${{ steps.test-changed-paths.outputs.any_changed == 'false' }}
+      shell: bash
+      run: |
+        exit 1
+
+    - name: Fail if changed paths is not valid json
+      shell: bash
+      run: |
+        jq -e . >/dev/null 2>&1 <<<"${{ steps.test-change-paths.outputs.changed_paths }}"
+
+    - name: Fail if changed files is not valid json
+      shell: bash
+      run: |
+        jq -e . >/dev/null 2>&1 <<<"${{ steps.test-change-paths.outputs.changed_files }}"

@@ -1,0 +1,56 @@
+---
+name: 'Test IAAS Inventory Variable'
+description: 'Composite action used to run Ansible within IAAS requirements'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Test inventory variable string value
+      id: test-inventory-variable-string
+      uses: ./actions/iaas-inventory-var
+      with:
+        inventory_path: "./tests/actions/iaas-inventory-var/inventory.yaml"
+        variable: "my_string"
+
+    - name: Test inventory variable dictionary value
+      id: test-inventory-variable-dict
+      uses: ./actions/iaas-inventory-var
+      with:
+        inventory_path: "./tests/actions/iaas-inventory-var/inventory.yaml"
+        variable: "my_dict"
+
+    - name: Test inventory variable boolean value
+      id: test-inventory-variable-boolean
+      uses: ./actions/iaas-inventory-var
+      with:
+        inventory_path: "./tests/actions/iaas-inventory-var/inventory.yaml"
+        variable: "my_string is defined"
+
+    - name: Test inventory variable list value
+      id: test-inventory-variable-list
+      uses: ./actions/iaas-inventory-var
+      with:
+        inventory_path: "./tests/actions/iaas-inventory-var/inventory.yaml"
+        variable: "my_list"
+
+    - name: Verify string value
+      shell: bash
+      run: |
+        [[ '${{ fromJson(steps.test-inventory-variable-string.outputs.json-output).msg }}' == 'foobar' ]]
+
+    - name: Verify dict value
+      shell: bash
+      run: |
+        jq -e .msg.bar.child.name >/dev/null 2>&1 <<< '${{ steps.test-inventory-variable-dict.outputs.json-output }}'
+
+    - name: Verify list value
+      shell: bash
+      run: |
+        count=$(jq -e '.msg | length' <<< '${{ steps.test-inventory-variable-list.outputs.json-output }}')
+        [[ "$count" -eq 2 ]]
+
+    - name: Verify boolean value
+      if: ${{ fromJson(steps.test-inventory-variable-boolean.outputs.json-output).msg == 'false' }}
+      shell: bash
+      run: |
+        exit 1

@@ -1,0 +1,50 @@
+---
+name: "IAAS Format Ref"
+description: "Composite action used to format ref value.  This is to support legacy Jenkins branch / tag references"
+inputs:
+  ref:
+    description: "The reference input value"
+    required: true
+outputs:
+  formatted_value:
+    description: "The formatted value"
+    value: ${{ steps.ref_format.outputs.value }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Test format refs with tags ref
+      id: test-format-refs-tag
+      uses: ./actions/iaas-format-ref
+      with:
+        ref: "refs/tags/tag1"
+
+    - name: Test format refs with heads ref
+      id: test-format-refs-branch
+      uses: ./actions/iaas-format-ref
+      with:
+        ref: "refs/heads/branch1"
+
+    - name: Test format refs no ref
+      id: test-format-no-ref
+      uses: ./actions/iaas-format-ref
+      with:
+        ref: "no-ref1"
+
+    - name: Verify tags ref
+      if: ${{ steps.test-format-refs-tag.outputs.formatted_value != 'tag1' }}
+      shell: bash
+      run: |
+        exit 1
+
+    - name: Verify branch ref
+      if: ${{ steps.test-format-refs-branch.outputs.formatted_value != 'branch1' }}
+      shell: bash
+      run: |
+        exit 1
+
+    - name: Verify branch ref
+      if: ${{ steps.test-format-no-ref.outputs.formatted_value != 'no-ref1' }}
+      shell: bash
+      run: |
+        exit 1
